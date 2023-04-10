@@ -1,0 +1,165 @@
+---
+title: "Learning PCMBase"
+author: "Alex Cope"
+date: '2023-04-10'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(PCMBaseCpp)
+library(adaptMCMC)
+require(coda)
+library(mvMORPH)
+```
+
+## Simulate data under BM
+
+For now, we will keep it simple. We will create a 50 species tree and simulate 
+
+```{r}
+tree <- pbtree(n=11)
+# Simulate the traits
+theta.1 <- 0.5
+theta.2 <- -0.2
+sigma.a <- 0.5
+sigma.ab <- 0.1
+sigma.b <- 0.25
+
+true.model <- PCM(model="BM__Global_X0__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+true.param <- c(theta.1,theta.2,sigma.a,sigma.ab,sigma.b)
+PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
+
+
+data.pcm <- PCMSim(tree = tree,model = true.model,X0 = true.model$X0)
+```
+
+
+```{r}
+## Basing this off of example from mvMORPH. Will update later
+prior <- function(x){
+  a <- dnorm(x[1],mean = 0, sd = 1, TRUE) # prior for the angles
+  e <- dnorm(x[2],mean = 0, sd = 1, TRUE) # prior for the angles
+  b <- dunif(x[3],min=1e-5, max=1, TRUE) # prior for the standard deviations of trait 1
+  c <- dunif(x[4],min=1e-5, max=1, TRUE) # prior for the standard deviations of trait 2
+  d <- dunif(x[5],min=1e-5, max=1, TRUE)
+  return(a+b+c+d+e)
+}
+
+# define the log-likelihood distribution
+log_post <- function(par,ll_fun){
+  ll <- ll_fun(par)
+  pr <- prior(par)
+  return(ll+pr)
+}
+
+```
+
+
+## Create a log-likelihood function that can be passed to the MCMC
+
+To save time, can create a log-likelihood function based on a given model, data, and tree that can be passed to the MCMC.
+
+Note that you can specify models and parameterizations using the general format below. 
+
+```{r}
+modelBM <- PCM(model="BM__Global_X0__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+
+likFun <- PCMCreateLikelihood(data.pcm, tree, modelBM,metaI = PCMInfoCpp)
+```
+
+
+```{r warning=FALSE}
+start.x0.1 <- theta.1
+start.x0.2 <- theta.2
+start.sig.a <- sigma.a
+start.sig.b <- sigma.b
+start.sig.ab <- sigma.ab
+
+start.val <- c(start.x0.1,
+               start.x0.2,
+               start.sig.a,
+               start.sig.ab,
+               start.sig.b)
+
+n.batch <- 5000
+
+# run the mcmc
+fit <- MCMC(log_post, n.batch, init = start.val, scale = rep(1, length(start.val)),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun)
+
+
+```
+
+
+```{r}
+plot(fit$samples[,1],type="l",ylab=expression(theta["A"]))
+abline(h=theta.1)
+acf(fit$samples[,1])
+plot(fit$samples[,2],type="l",ylab=expression(theta["B"]))
+abline(h=theta.2)
+acf(fit$samples[,2])
+plot(fit$samples[,3],type="l",ylab=expression(sigma["A"]))
+abline(h=sigma.a)
+acf(fit$samples[,3])
+plot(fit$samples[,4],type="l",ylab=expression(sigma["AB"]))
+abline(h=sigma.ab)
+acf(fit$samples[,4])
+plot(fit$samples[,5],type="l",ylab=expression(sigma["B"]))
+abline(h=sigma.b)
+acf(fit$samples[,5])
+
+
+```
+
+
+## Random start
+
+```{r warning=FALSE}
+start.x0.1 <- rnorm(n=1,mean=0,sd=2)
+start.x0.2 <- rnorm(n=1,mean=0,sd=2)
+start.sig.a <- runif(n=1,min=1e-5, max=1)
+start.sig.b <- runif(n=1,min=1e-5, max=1)
+start.sig.ab <- runif(n=1,min=1e-5, max=1)
+
+start.val <- c(start.x0.1,
+               start.x0.2,
+               start.sig.a,
+               start.sig.ab,
+               start.sig.b)
+
+n.batch <- 10000
+
+# run the mcmc
+fit.2 <- MCMC(log_post, n.batch, init = start.val, scale = rep(1, length(start.val)),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun)
+
+
+```
+
+
+
+```{r}
+plot(fit.2$samples[,1],type="l",ylab=expression(theta["A"]))
+abline(h=theta.1)
+acf(fit.2$samples[,1])
+plot(fit.2$samples[,2],type="l",ylab=expression(theta["B"]))
+abline(h=theta.2)
+acf(fit.2$samples[,2])
+plot(fit.2$samples[,3],type="l",ylab=expression(sigma["A"]))
+abline(h=sigma.a)
+acf(fit.2$samples[,3])
+plot(fit.2$samples[,4],type="l",ylab=expression(sigma["AB"]))
+abline(h=sigma.ab)
+acf(fit.2$samples[,4])
+plot(fit.2$samples[,5],type="l",ylab=expression(sigma["B"]))
+abline(h=sigma.b)
+acf(fit.2$samples[,5])
+
+```
+
+
+
+## Setting up for hierarchical model
+
+I think we will need to clearly define how the `param` value in MCMC needs to be defin
