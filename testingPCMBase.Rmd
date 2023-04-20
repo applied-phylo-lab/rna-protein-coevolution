@@ -10,7 +10,59 @@ knitr::opts_chunk$set(echo = TRUE)
 library(PCMBaseCpp)
 library(adaptMCMC)
 require(coda)
-library(mvMORPH)
+#library(LaplacesDemon)
+library(extraDistr)
+
+
+## Basing this off of example from mvMORPH. Will update later
+prior_BM <- function(x)
+{
+  x0.A <- dnorm(x[1],mean = 0, sd = 1, TRUE) # prior for the X0.A
+  x0.B <- dnorm(x[2],mean = 0, sd = 1, TRUE) # prior for X0.B
+  sigma.A <- dhauchy(x[3],sigma=0.1, TRUE) # prior for the standard deviations of trait A
+  sigma.AB <- dhcauchy(x[4],sigma=0.1, TRUE) # prior for the off-diagonal of symmetric sigma matrix
+  sigma.B <- dhcauchy(x[5],sigma=0.1, TRUE) # prior for the standard deviations of trait B
+  return(x0.A + x0.B + sigma.A + sigma.AB + sigma.B)
+}
+
+prior_OU <- function(x)
+{
+  x0.A <- dnorm(x[1],mean = 0, sd = 1, TRUE) # prior for the X0.A
+  x0.B <- dnorm(x[2],mean = 0, sd = 1, TRUE) # prior for X0.B
+  alpha.A <- dhcauchy(x[3],sigma=0.1, TRUE) # prior for the alphaof trait A
+  alpha.BA <- dhcauchy(x[4],sigma=0.1, TRUE) # prior for the off-diagonal of non-symmetric H matrix
+  alpha.AB <- dhcauchy(x[5],sigma=0.1, TRUE) # prior for the off-diagonal of non-symmetric H matrix
+  alpha.B <- dhcauchy(x[6],sigma=0.1, TRUE) # prior for the alpha of trait B
+  theta.A <- dnorm(x[7],mean = 0, sd = 1, TRUE) # prior for the optimum of trait A
+  theta.B <- dnorm(x[8],mean = 0, sd = 1, TRUE) # prior for the optimum of trait B
+  sigma.A <- dhauchy(x[9],sigma=0.1, TRUE) # prior for the standard deviations of trait A
+  sigma.AB <- dhcauchy(x[10],sigma=0.1, TRUE) # prior for the off-diagonal of symmetric sigma matrix
+  sigma.B <- dhcauchy(x[11],sigma=0.1, TRUE) # prior for the standard deviations of trait B
+  return(x0.A + x0.B + alpha.A + alpha.BA + alpha.AB + alpha.B + theta.A + theta.B + sigma.A + sigma.AB + sigma.B)
+}
+
+
+# define the log-likelihood distribution
+log_post_BM<- function(par,ll_fun)
+{
+  ll <- ll_fun(par)
+  pr <- prior_BM(par)
+  return(ll+pr)
+}
+
+# define the log-likelihood distribution
+log_post_OU<- function(par,ll_fun){
+  ll <- ll_fun(par)
+  pr <- prior_OU(par)
+  return(ll+pr)
+}
+
+
+diagnostics <- function(trace,truth = NULL,...)
+{
+  
+}
+
 ```
 
 ## Simulate data under BM
@@ -20,40 +72,20 @@ For now, we will keep it simple. We will create a 50 species tree and simulate
 ```{r}
 tree <- pbtree(n=11)
 # Simulate the traits
-theta.1 <- 0.5
-theta.2 <- -0.2
+x0.a <- 0.5
+x0.b <- -0.2
 sigma.a <- 0.5
 sigma.ab <- 0.1
 sigma.b <- 0.25
 
 true.model <- PCM(model="BM__Global_X0__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
-true.param <- c(theta.1,theta.2,sigma.a,sigma.ab,sigma.b)
+true.param <- c(x0.a,x0.b,sigma.a,sigma.ab,sigma.b)
 PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
 
 
 data.pcm <- PCMSim(tree = tree,model = true.model,X0 = true.model$X0)
 ```
 
-
-```{r}
-## Basing this off of example from mvMORPH. Will update later
-prior <- function(x){
-  a <- dnorm(x[1],mean = 0, sd = 1, TRUE) # prior for the angles
-  e <- dnorm(x[2],mean = 0, sd = 1, TRUE) # prior for the angles
-  b <- dunif(x[3],min=1e-5, max=1, TRUE) # prior for the standard deviations of trait 1
-  c <- dunif(x[4],min=1e-5, max=1, TRUE) # prior for the standard deviations of trait 2
-  d <- dunif(x[5],min=1e-5, max=1, TRUE)
-  return(a+b+c+d+e)
-}
-
-# define the log-likelihood distribution
-log_post <- function(par,ll_fun){
-  ll <- ll_fun(par)
-  pr <- prior(par)
-  return(ll+pr)
-}
-
-```
 
 
 ## Create a log-likelihood function that can be passed to the MCMC
@@ -70,19 +102,18 @@ likFun <- PCMCreateLikelihood(data.pcm, tree, modelBM,metaI = PCMInfoCpp)
 
 
 ```{r warning=FALSE}
-start.x0.1 <- theta.1
-start.x0.2 <- theta.2
+start.x0.a <- x0.a
+start.x0.b <- x0.b
 start.sig.a <- sigma.a
 start.sig.b <- sigma.b
 start.sig.ab <- sigma.ab
 
-start.val <- c(start.x0.1,
-               start.x0.2,
+start.val <- c(start.x0.a,
+               start.x0.b,
                start.sig.a,
                start.sig.ab,
                start.sig.b)
 
-n.batch <- 5000
 
 # run the mcmc
 fit <- MCMC(log_post, n.batch, init = start.val, scale = rep(1, length(start.val)),
@@ -140,11 +171,11 @@ fit.2 <- MCMC(log_post, n.batch, init = start.val, scale = rep(1, length(start.v
 
 
 ```{r}
-plot(fit.2$samples[,1],type="l",ylab=expression(theta["A"]))
-abline(h=theta.1)
+plot(fit.2$samples[,1],type="l",ylab=expression("X"["0,A"]))
+abline(h=x0.a)
 acf(fit.2$samples[,1])
-plot(fit.2$samples[,2],type="l",ylab=expression(theta["B"]))
-abline(h=theta.2)
+plot(fit.2$samples[,2],type="l",ylab=expression("X"["0,B"]))
+abline(h=x0.b)
 acf(fit.2$samples[,2])
 plot(fit.2$samples[,3],type="l",ylab=expression(sigma["A"]))
 abline(h=sigma.a)
@@ -160,6 +191,320 @@ acf(fit.2$samples[,5])
 
 
 
-## Setting up for hierarchical model
+# Testing OU model
 
-I think we will need to clearly define how the `param` value in MCMC needs to be defin
+## Simulate data under OU process
+
+```{r}
+tree <- pbtree(n=200)
+# Simulate the traits
+x0.a <- 0.25
+x0.b <- -0.1
+theta.a <- 0.5
+theta.b <- -0.2
+sigma.a <- 0.5
+sigma.ab <- 0.1
+sigma.b <- 0.25
+alpha.a <- 0.75
+alpha.b <- 0.5
+alpha.ab <- 0.2
+alpha.ba <- 0.4
+
+true.model <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+true.param <- c(x0.a,x0.b,alpha.a,alpha.ba,alpha.ab,alpha.b,theta.a,theta.b,sigma.a,sigma.ab,sigma.b)
+PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
+
+
+data.pcm <- PCMSim(tree = tree,model = true.model,X0 = true.model$X0)
+
+modelOU <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+
+likFun <- PCMCreateLikelihood(data.pcm, tree, modelOU,metaI = PCMInfoCpp)
+```
+
+### Start MCMC at truth
+
+```{r warning=FALSE}
+
+n.batch <- 50000
+fit.OU <- MCMC(log_post_OU, n.batch, init = true.param, scale = rep(1,length(start.val)),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun)
+
+
+
+
+```
+
+
+```{r}
+
+# X0
+plot(fit.OU$samples[,1],type="l",ylab=expression("X"["0,A"]))
+abline(h=x0.a)
+acf(fit.OU$samples[,1])
+
+plot(fit.OU$samples[,2],type="l",ylab=expression("X"["0,B"]))
+abline(h=x0.b)
+acf(fit.OU$samples[,2])
+
+# H matrix
+plot(fit.OU$samples[,3],type="l",ylab=expression(alpha["A"]))
+abline(h=alpha.a)
+acf(fit.OU$samples[,3])
+
+plot(fit.OU$samples[,4],type="l",ylab=expression(alpha["BA"]))
+abline(h=alpha.ba)
+acf(fit.OU$samples[,4])
+
+plot(fit.OU$samples[,5],type="l",ylab=expression(alpha["AB"]))
+abline(h=alpha.ab)
+acf(fit.OU$samples[,5])
+
+plot(fit.OU$samples[,6],type="l",ylab=expression(alpha["B"]))
+abline(h=alpha.b)
+acf(fit.OU$samples[,6])
+
+# Theta
+
+plot(fit.OU$samples[,7],type="l",ylab=expression(theta["A"]))
+abline(h=theta.a)
+acf(fit.OU$samples[,7])
+
+plot(fit.OU$samples[,8],type="l",ylab=expression(theta["B"]))
+abline(h=theta.b)
+acf(fit.OU$samples[,8])
+
+
+# Sigma matrix
+plot(fit.OU$samples[,9],type="l",ylab=expression(sigma["A"]))
+abline(h=sigma.a)
+acf(fit.OU$samples[,9])
+
+plot(fit.OU$samples[,10],type="l",ylab=expression(sigma["AB"]))
+abline(h=sigma.ab)
+acf(fit.OU$samples[,10])
+
+
+plot(fit.OU$samples[,11],type="l",ylab=expression(sigma["B"]))
+abline(h=sigma.b)
+acf(fit.OU$samples[,11])
+
+
+```
+
+
+
+
+# Testing hierarchical model framework
+
+```{r}
+
+n <- 10 # number of loci
+tree <- pbtree(n=11)
+# Simulate the root state of the 2 traits across 10 loci
+x0.a <- rnorm(n=n,mean=0,sd=1)
+x0.b <- rnorm(n=n,mean=0,sd=1)
+
+# Simulate the optimum of the 2 traits across 10 loci
+
+theta.a <- rnorm(n=n,mean=0,sd=1)
+theta.b <- rnorm(n=n,mean=0,sd=1)
+
+# Use same alpha and sigma as above
+
+sigma.a <- 0.2
+sigma.ab <- 0.15
+sigma.b <- 0.1
+alpha.a <- 1.5
+alpha.b <- 1.0
+alpha.ab <- 1.25
+alpha.ba <- 0.75
+
+
+data.pcm <- vector(mode="list",length=n)
+likFun.list <- vector(mode="list",length=n)
+for (i in 1:n)
+{
+  true.model <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+  true.param <- c(x0.a[i],x0.b[i],alpha.a,alpha.ba,alpha.ab,alpha.b,theta.a[i],theta.b[i],sigma.a,sigma.ab,sigma.b)
+  PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
+  
+  data.pcm[[i]] <- PCMSim(tree = tree,model = true.model,X0 = true.model$X0)
+  
+  modelOU <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+
+  likFun.list[[i]] <- PCMCreateLikelihood(data.pcm[[i]], tree, modelOU,metaI = PCMInfoCpp)
+}
+```
+
+
+
+```{r}
+hyper_prior <- function(x)
+{
+  alpha.A <- dhcauchy(x[1],sigma=0.1, TRUE) # prior for the alphaof trait A
+  alpha.BA <- dhcauchy(x[2],sigma=0.1, TRUE) # prior for the off-diagonal of non-symmetric H matrix
+  alpha.AB <- dhcauchy(x[3],sigma=0.1, TRUE) # prior for the off-diagonal of non-symmetric H matrix
+  alpha.B <- dhcauchy(x[4],sigma=0.1, TRUE) # prior for the alpha of trait B
+  sigma.A <- dhcauchy(x[5],sigma=0.1, TRUE) # prior for the standard deviations of trait A
+  sigma.AB <- dhcauchy(x[6],sigma=0.1, TRUE) # prior for the off-diagonal of symmetric sigma matrix
+  sigma.B <- dhcauchy(x[7],sigma=0.1, TRUE) # prior for the standard deviations of trait B
+  return(alpha.A + alpha.BA + alpha.AB + alpha.B + sigma.A + sigma.AB + sigma.B)
+}
+
+hyper_prior_bayou <- function(x)
+{
+  alpha.A <- dlnorm(x[1],meanlog = 0.25,sdlog = 1.5, log= TRUE) # prior for the alphaof trait A
+  alpha.BA <- dlnorm(x[2],meanlog = 0.25,sdlog = 1.5, log= TRUE) # prior for the off-diagonal of non-symmetric H matrix
+  alpha.AB <- dlnorm(x[3],meanlog = 0.25,sdlog = 1.5, log= TRUE) # prior for the off-diagonal of non-symmetric H matrix
+  alpha.B <- dlnorm(x[4],meanlog = 0.25,sdlog = 1.5, log= TRUE) # prior for the alpha of trait B
+  sigma.A <- dlnorm(x[5],meanlog = 0.25,sdlog = 1.5, log= TRUE) # prior for the standard deviations of trait A
+  sigma.AB <- dlnorm(x[6],meanlog = 0.25,sdlog = 1.5, log= TRUE) # prior for the off-diagonal of symmetric sigma matrix
+  sigma.B <- dlnorm(x[7],meanlog = 0.25,sdlog = 1.5, log= TRUE) # prior for the standard deviations of trait B
+  return(alpha.A + alpha.BA + alpha.AB + alpha.B + sigma.A + sigma.AB + sigma.B)
+}
+
+prior_OU_loci <- function(x)
+{
+  x0.A <- dnorm(x[1],mean = 0, sd = 1, TRUE) # prior for the X0.A
+  x0.B <- dnorm(x[2],mean = 0, sd = 1, TRUE) # prior for X0.B
+  theta.A <- dnorm(x[3],mean = 0, sd = 1, TRUE) # prior for the optimum of trait A
+  theta.B <- dnorm(x[4],mean = 0, sd = 1, TRUE) # prior for the optimum of trait B
+  return(x0.A + x0.B + theta.A + theta.B)
+}
+
+# Treat the first 7 parameters as the H and Sigma matrix. Remaining are X0_A, X0_B, Theta_A, Theta_B for each loci
+# | Alpha A | Alpha BA | Alpha AB | Alpha B | Sigma A | Sigma AB | Sigma B |
+log_post_hier<- function(par,ll_fun)
+{
+  current.loci <- 1
+  lp <- 0
+  hypr <- hyper_prior_bayou(par[1:7])
+  for (i in seq(8,length(par),by=4))
+  {
+    tmp <- c(par[i],par[i+1],par[1],par[2],par[3],par[4],par[i+2],par[i+3],par[5],par[6],par[7])
+    ll <- ll_fun[[current.loci]](tmp)
+    pr <- prior_OU_loci(c(par[i],par[i+1],par[i+2],par[i+3]))
+    lp <- lp + (ll + pr)
+    current.loci <- current.loci + 1
+  }
+  lp <- lp + hypr
+  return(lp)
+}
+
+```
+
+
+
+
+```{r warning = F}
+start.alpha.a <- alpha.a
+start.alpha.b <- alpha.b
+start.alpha.ab <- alpha.ab
+start.alpha.ba <- alpha.ba
+start.sig.a <- sigma.a
+start.sig.ab <- sigma.ab
+start.sig.b <- sigma.b
+
+start.val <- c(start.alpha.a,
+               start.alpha.ba,
+               start.alpha.ab,
+               start.alpha.b,
+               start.sig.a,
+               start.sig.ab,
+               start.sig.b)
+
+for (i in 1:n)
+{
+  start.val <- c(start.val,x0.a[i],x0.b[i],theta.a[i],theta.b[i])
+}
+log_post_hier(start.val,ll_fun = likFun.list)
+
+
+```
+
+```{r warning=F}
+# run the mcmc
+
+
+n.batch <- 200000
+fit.hier.OU <- MCMC(log_post_hier, n.batch, init = start.val, scale = rep(1,length(start.val)),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun.list)
+
+
+
+
+
+```
+
+
+
+```{r}
+# H matrix
+plot(fit.hier.OU$samples[,1],type="l",ylab=expression(alpha["A"]))
+abline(h=alpha.a)
+
+plot(fit.hier.OU$samples[,2],type="l",ylab=expression(alpha["BA"]))
+abline(h=alpha.ba)
+
+plot(fit.hier.OU$samples[,3],type="l",ylab=expression(alpha["AB"]))
+abline(h=alpha.ab)
+
+plot(fit.hier.OU$samples[,4],type="l",ylab=expression(alpha["B"]))
+abline(h=alpha.b)
+
+
+plot(fit.hier.OU$samples[,5],type="l",ylab=expression(sigma["A"]))
+abline(h=sigma.a)
+
+plot(fit.hier.OU$samples[,6],type="l",ylab=expression(sigma["AB"]))
+abline(h=sigma.ab)
+
+
+plot(fit.hier.OU$samples[,7],type="l",ylab=expression(sigma["B"]))
+abline(h=sigma.b)
+
+
+```
+
+
+
+## Random Start
+
+
+```{r warning = F}
+start.alpha.a <- rhcauchy(n=1,sigma=0.1)
+start.alpha.b <- rhcauchy(n=1,sigma=0.1)
+start.alpha.ab <- rhcauchy(n=1,sigma=0.1)
+start.alpha.ba <- rhcauchy(n=1,sigma=0.1)
+start.sig.a <- rhcauchy(n=1,sigma=0.1)
+start.sig.ab <- rhcauchy(n=1,sigma=0.1)
+start.sig.b <- rhcauchy(n=1,sigma=0.1)
+
+start.val <- c(start.alpha.a,
+               start.alpha.ba,
+               start.alpha.ab,
+               start.alpha.b,
+               start.sig.a,
+               start.sig.ab,
+               start.sig.b)
+
+for (i in 1:n)
+{
+  start.val <- c(start.val,rnorm(n=4,mean=0,sd=1))
+}
+
+
+# run the mcmc
+
+
+n.batch <- 200000
+fit.hier.OU.rand.start <- MCMC(log_post_hier, n.batch, init = start.val, scale = rep(1,length(start.val)),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun.list)
+
+
+
+
+
+```
+
