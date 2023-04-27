@@ -11,6 +11,7 @@ library(PCMBaseCpp)
 library(adaptMCMC)
 require(coda)
 library(tidyverse)
+library(cowplot)
 library(ggpubr)
 #library(LaplacesDemon)
 #library(extraDistr)
@@ -81,10 +82,19 @@ prior_OU_loci <- function(x)
   return(x0.A + x0.B + theta.A + theta.B)
 }
 
+prior_OU_loci_no_root <- function(x)
+{
+  theta.A <- dnorm(x[1],mean = 0, sd = 1, TRUE) # prior for the optimum of trait A
+  theta.B <- dnorm(x[2],mean = 0, sd = 1, TRUE) # prior for the optimum of trait B
+  return(theta.A + theta.B)
+}
+
+
 # Treat the first 7 parameters as the H and Sigma matrix. Remaining are X0_A, X0_B, Theta_A, Theta_B for each loci
 # | Alpha A | Alpha BA | Alpha AB | Alpha B | Sigma A | Sigma AB | Sigma B |
 log_post_hier<- function(par,ll_fun)
 {
+  print(names(par))
   lp <- 0
   hypr <- hyper_prior_bayou(par[1:7])
   num.genes <- (length(par)-7)/4 
@@ -123,11 +133,81 @@ log_post_hier_parallel<- function(par,ll_fun)
 }
 
 
-diagnostics <- function(model.object,truth = NULL,...)
+
+# Treat the first 7 parameters as the H and Sigma matrix. Remaining are Theta_A, Theta_B for each loci
+# | Alpha A | Alpha BA | Alpha AB | Alpha B | Sigma A | Sigma AB | Sigma B |
+log_post_hier_no_root <- function(par,ll_fun)
 {
-  plot(trace$logp,type="l",main="Log Posterior",ylab="Log(Posterior)")
-  
+  lp <- 0
+  hypr <- hyper_prior_bayou(par[1:7])
+  num.genes <- (length(par)-7)/2
+  lp <- sum(unlist(lapply(1:num.genes, function(current.loci)
+    {
+      par.index <- 7 + 2*(current.loci-1) + 1
+      tmp <- c(par[1],par[2],par[3],par[4],par[par.index],par[par.index+1],par[5],par[6],par[7])
+      ll <- ll_fun[[current.loci]](tmp)
+      pr <- prior_OU_loci_no_root(c(par[par.index],par[par.index+1]))
+      ll + pr
+      
+    })))
+  lp <- lp + hypr
+  return(lp)
 }
+
+
+# Treat the first 7 parameters as the H and Sigma matrix. Remaining are Theta_A, Theta_B for each loci
+# | Alpha A | Alpha BA | Alpha AB | Alpha B | Sigma A | Sigma AB | Sigma B |
+log_post_hier_parallel_no_root <- function(par,ll_fun)
+{
+  lp <- 0
+  hypr <- hyper_prior_bayou(par[1:7])
+  num.genes <- (length(par)-7)/2
+  lp <- sum(unlist(mclapply(1:num.genes, function(current.loci)
+    {
+      par.index <- 7 + 2*(current.loci-1) + 1
+      tmp <- c(par[1],par[2],par[3],par[4],par[par.index],par[par.index+1],par[5],par[6],par[7])
+      ll <- ll_fun[[current.loci]](tmp)
+      pr <- prior_OU_loci_no_root(c(par[par.index],par[par.index+1]))
+      ll + pr
+      
+    },mc.cores = 4)))
+  lp <- lp + hypr
+  return(lp)
+}
+
+
+
+tracePlot <- function(model.fit,truth,type="X0_A")
+{
+  num.genes <- (ncol(model.fit$samples)-7)/4 
+  if (type == "X0_A")
+  {
+    index <- seq(8,ncol(model.fit$samples),by=4)
+  } else if (type == "X0_B"){
+    index <- seq(9,ncol(model.fit$samples),by=4)
+  } else if (type == "Theta_A"){
+    index <- seq(10,ncol(model.fit$samples),by=4)
+  } else if (type == "Theta_B"){
+    index <- seq(11,ncol(model.fit$samples),by=4)
+  }
+  param.matrix <- model.fit$samples[,index]
+  
+  post.means <- colMeans(param.matrix)
+  param.df <- data.frame(True.Values = truth[index],
+                         Posterior.Mean = post.means)
+  p <- ggplot(param.df,aes(x=True.Values,y=Posterior.Mean)) +
+    geom_point() +
+    xlab("Truth") +
+    ylab("Posterior Means") +
+    ggtitle(type) +
+    theme_cowplot() +
+    theme(aspect.ratio=1) +
+    stat_cor() +
+    geom_abline(intercept=0,slope = 1,linetype="dashed")
+  return(p)
+    
+}
+
 
 ```
 
@@ -255,6 +335,14 @@ abline(h=sigma.b)
 
 # Testing OU model
 
+## Create tree for OU
+
+```{r}
+tip.heights <- ips::tipHeights(ba.tree)
+sim.tree <- pbtree(n = 50,scale = unname(tip.heights[1]))
+
+```
+
 
 ## Simulate data under OU process
 
@@ -278,11 +366,12 @@ true.param <- c(x0.a,x0.b,alpha.a,alpha.ba,alpha.ab,alpha.b,theta.a,theta.b,sigm
 PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
 
 
-data.pcm <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+data.pcm <- PCMSim(tree = sim.tree,model = true.model,X0 = true.model$X0)
 
 modelOU <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
 
-likFun <- PCMCreateLikelihood(data.pcm, ba.tree, modelOU,metaI = PCMInfoCpp)
+likFun <- PCMCreateLikelihood(data.pcm, sim.tree, modelOU,metaI = PCMInfoCpp)
+true.post <- log_post_OU(par = true.param,ll_fun = likFun)
 ```
 
 ### Start MCMC at truth
@@ -300,6 +389,10 @@ fit.OU <- MCMC(log_post_OU, n.batch, init = true.param, scale = rep(1,length(tru
 
 
 ```{r}
+# Log Posterior
+plot(fit.OU$log.p,type="l",ylab="Log(Posterior)")
+abline(h=true.post)
+
 
 # X0
 plot(fit.OU$samples[,1],type="l",ylab=expression("X"["0,A"]))
@@ -383,6 +476,12 @@ fit.OU.rand.start <- MCMC(log_post_OU, n.batch, init = start.val, scale = rep(1,
 ```
 
 ```{r}
+
+# Log Posterior
+plot(fit.OU.rand.start$log.p,type="l",ylab="Log(Posterior)")
+abline(h=true.post)
+
+
 # X0
 plot(fit.OU.rand.start$samples[,1],type="l",ylab=expression("X"["0,A"]))
 abline(h=x0.a)
@@ -445,13 +544,13 @@ theta.b <- rnorm(n=n,mean=0,sd=1)
 
 # Use same alpha and sigma as above
 
-sigma.a <- 0.2
-sigma.ab <- 0.15
-sigma.b <- 0.1
-alpha.a <- 1.5
-alpha.b <- 1.0
-alpha.ab <- 1.25
-alpha.ba <- 0.75
+sigma.a <- 0.5
+sigma.ab <- 0.1
+sigma.b <- 0.25
+alpha.a <- 0.75
+alpha.b <- 0.5
+alpha.ab <- 0.2
+alpha.ba <- 0.4
 
 
 data.pcm <- vector(mode="list",length=n)
@@ -490,11 +589,17 @@ true.param <- c(start.alpha.a,
                start.sig.a,
                start.sig.ab,
                start.sig.b)
+names.true.param <- c("H_A","H_BA","H_AB","H_B","Sigma_A","Sigma_AB","Sigma.B")
 
 for (i in 1:n)
 {
   true.param <- c(true.param,x0.a[i],x0.b[i],theta.a[i],theta.b[i])
+  names.true.param <- c(names.true.param,paste0(c("X0_A","X0_B","Theta_A","Theta_B"),"_",i))
 }
+names(true.param) <- names.true.param
+
+
+true.post <- log_post_hier(true.param,ll_fun = likFun.list)
 
 ```
 
@@ -502,7 +607,7 @@ for (i in 1:n)
 # run the mcmc
 
 
-n.batch <- 200000
+n.batch <- 50000
 fit.hier.OU <- MCMC(log_post_hier, n.batch, init = true.param, scale = rep(1,length(true.param)),
             adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun.list)
 
@@ -513,6 +618,10 @@ fit.hier.OU <- MCMC(log_post_hier, n.batch, init = true.param, scale = rep(1,len
 ```
 
 ```{r}
+
+# Log Posterior
+plot(fit.hier.OU$log.p,type="l",ylab="Log(Posterior)")
+abline(h=true.post)
 
 # H matrix
 plot(fit.hier.OU$samples[,1],type="l",ylab=expression(alpha["A"]))
@@ -537,6 +646,12 @@ abline(h=sigma.ab)
 
 plot(fit.hier.OU$samples[,7],type="l",ylab=expression(sigma["B"]))
 abline(h=sigma.b)
+
+
+tracePlot(model.fit = fit.hier.OU,truth=true.param,type="X0_A")
+tracePlot(model.fit = fit.hier.OU,truth=true.param,type="X0_B")
+tracePlot(model.fit = fit.hier.OU,truth=true.param,type="Theta_A")
+tracePlot(model.fit = fit.hier.OU,truth=true.param,type="Theta_B")
 
 
 ```
@@ -572,7 +687,7 @@ for (i in 1:n)
 # run the mcmc
 
 
-n.batch <- 200000
+n.batch <- 50000 * 50
 fit.hier.OU.rand.start <- MCMC(log_post_hier, n.batch, init = start.val, scale = rep(1,length(start.val)),
             adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun.list)
 
@@ -585,7 +700,7 @@ fit.hier.OU.rand.start <- MCMC(log_post_hier, n.batch, init = start.val, scale =
 ```{r}
 # Log Posterior
 plot(fit.hier.OU.rand.start$log.p,type="l",ylab="Log(Posterior)")
-
+abline(h=true.post)
 
 
 # H matrix
@@ -613,41 +728,6 @@ plot(fit.hier.OU.rand.start$samples[,7],type="l",ylab=expression(sigma["B"]))
 abline(h=sigma.b)
 
 
-```
-
-```{r}
-
-tracePlot <- function(model.fit,truth,type="X0_A")
-{
-  num.genes <- (ncol(model.fit$samples)-7)/4 
-  if (type == "X0_A")
-  {
-    index <- seq(8,ncol(model.fit$samples),by=4)
-  } else if (type == "X0_B"){
-    index <- seq(9,ncol(model.fit$samples),by=4)
-  } else if (type == "Theta_A"){
-    index <- seq(10,ncol(model.fit$samples),by=4)
-  } else if (type == "Theta_B"){
-    index <- seq(11,ncol(model.fit$samples),by=4)
-  }
-  param.matrix <- model.fit$samples[,index]
-  
-  post.means <- colMeans(param.matrix)
-  param.df <- data.frame(True.Values = truth[index],
-                         Posterior.Mean = post.means)
-  p <- ggplot(param.df,aes(x=True.Values,y=Posterior.Mean)) +
-    geom_point() +
-    xlab("Truth") +
-    ylab("Posterior Means") +
-    ggtitle(type) +
-    theme_cowplot() +
-    theme(aspect.ratio=1) +
-    stat_cor() +
-    geom_abline(intercept=0,slope = 1,linetype="dashed")
-  return(p)
-    
-}
-
 tracePlot(model.fit = fit.hier.OU.rand.start,truth=true.param,type="X0_A")
 tracePlot(model.fit = fit.hier.OU.rand.start,truth=true.param,type="X0_B")
 tracePlot(model.fit = fit.hier.OU.rand.start,truth=true.param,type="Theta_A")
@@ -655,7 +735,169 @@ tracePlot(model.fit = fit.hier.OU.rand.start,truth=true.param,type="Theta_B")
 
 
 
+```
+
+```{r}
+save(fit.hier.OU.rand.start,file="2023-04-26_mcmc_hierarchical_model_object.Rda")
+```
+
+
+# Ommiting X0
+
+```{r}
+
+n <- 10 # number of loci
+# Simulate the root state of the 2 traits across 10 loci
+x0.a <- rnorm(n=n,mean=0,sd=1)
+x0.b <- rnorm(n=n,mean=0,sd=1)
+
+# Simulate the optimum of the 2 traits across 10 loci
+
+theta.a <- rnorm(n=n,mean=0,sd=1)
+theta.b <- rnorm(n=n,mean=0,sd=1)
+
+# Use same alpha and sigma as above
+
+sigma.a <- 0.5
+sigma.ab <- 0.1
+sigma.b <- 0.25
+alpha.a <- 0.75
+alpha.b <- 0.5
+alpha.ab <- 0.2
+alpha.ba <- 0.4
+
+
+data.pcm <- vector(mode="list",length=n)
+likFun.list <- vector(mode="list",length=n)
+for (i in 1:n)
+{
+  true.model <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+  true.param <- c(x0.a[i],x0.b[i],alpha.a,alpha.ba,alpha.ab,alpha.b,theta.a[i],theta.b[i],sigma.a,sigma.ab,sigma.b)
+  PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
+  
+  data.pcm[[i]] <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+  
+  modelOU <- PCM(model="OU__Omitted_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+
+  likFun.list[[i]] <- PCMCreateLikelihood(data.pcm[[i]], ba.tree, modelOU)
+}
 
 
 ```
 
+
+```{r}
+start.alpha.a <- alpha.a
+start.alpha.b <- alpha.b
+start.alpha.ab <- alpha.ab
+start.alpha.ba <- alpha.ba
+start.sig.a <- sigma.a
+start.sig.ab <- sigma.ab
+start.sig.b <- sigma.b
+
+true.param <- c(start.alpha.a,
+               start.alpha.ba,
+               start.alpha.ab,
+               start.alpha.b,
+               start.sig.a,
+               start.sig.ab,
+               start.sig.b)
+
+for (i in 1:n)
+{
+  true.param <- c(true.param,theta.a[i],theta.b[i])
+}
+
+```
+
+
+
+```{r}
+# Treat the first 7 parameters as the H and Sigma matrix. Remaining are Theta_A, Theta_B for each loci
+# | Alpha A | Alpha BA | Alpha AB | Alpha B | Sigma A | Sigma AB | Sigma B |
+log_post_hier_no_root <- function(par,ll_fun)
+{
+  lp <- 0
+  hypr <- hyper_prior_bayou(par[1:7])
+  num.genes <- (length(par)-7)/2
+  lp <- sum(unlist(lapply(1:num.genes, function(current.loci)
+    {
+      par.index <- 7 + 2*(current.loci-1) + 1
+      tmp <- c(par[1],par[2],par[3],par[4],par[par.index],par[par.index+1],par[5],par[6],par[7])
+      ll <- ll_fun[[current.loci]](tmp)
+      pr <- prior_OU_loci_no_root(c(par[par.index],par[par.index+1]))
+      ll + pr
+      
+    })))
+  lp <- lp + hypr
+  return(lp)
+}
+
+
+n.batch <- 10000
+fit.hier.OU.no.root <- MCMC(log_post_hier_no_root, n.batch, init = true.param, scale = rep(1,length(true.param)),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun.list)
+
+
+
+
+
+```
+
+
+```{r}
+library(ape)
+library(phytools)
+library(PCMBase)
+library(PCMBaseCpp)
+set.seed(15)
+
+tree <- pbtree(n=11)
+
+x0.a <- rnorm(n=1,mean=0,sd=1)
+x0.b <- rnorm(n=1,mean=0,sd=1)
+
+# Simulate the optimum of the 2 traits across 10 loci
+theta.a <- rnorm(n=n,mean=0,sd=1)
+theta.b <- rnorm(n=n,mean=0,sd=1)
+
+# Use same alpha and sigma as above
+sigma.a <- 0.5
+sigma.ab <- 0.1
+sigma.b <- 0.25
+alpha.a <- 0.75
+alpha.b <- 0.5
+alpha.ab <- 0.2
+alpha.ba <- 0.4
+
+
+true.model <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+true.param <- c(x0.a,x0.b,alpha.a,alpha.ba,alpha.ab,alpha.b,theta.a,theta.b,sigma.a,sigma.ab,sigma.b)
+PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
+
+data.pcm<- PCMSim(tree = tree,model = true.model,X0 = true.model$X0)
+
+
+modelOU.w.root <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+modelOU.wo.root <- PCM(model="OU__Omitted_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+
+
+likFun.w.root.wo.cpp <- PCMCreateLikelihood(data.pcm, tree, modelOU.w.root)
+likFun.wo.root.wo.cpp <- PCMCreateLikelihood(data.pcm, tree, modelOU.wo.root)
+
+likFun.w.root.w.cpp <- PCMCreateLikelihood(data.pcm, tree, modelOU.w.root,metaI = PCMInfoCpp)
+likFun.wo.root.w.cpp <- PCMCreateLikelihood(data.pcm, tree, modelOU.wo.root,metaI = PCMInfoCpp)
+
+likFun.w.root.wo.cpp(true.param)
+likFun.wo.root.wo.cpp(true.param[3:length(true.param)])
+
+likFun.w.root.w.cpp(true.param)
+likFun.wo.root.w.cpp(true.param[3:length(true.param)])
+
+
+```
+
+
+```{r}
+
+```
