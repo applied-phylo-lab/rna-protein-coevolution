@@ -1,0 +1,236 @@
+---
+title: "Testing OU model"
+author: "Alex Cope"
+date: '2023-05-08'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(PCMBase,lib.loc = "~/R_dev")
+library(PCMBaseCpp)
+library(adaptMCMC)
+require(coda)
+library(tidyverse)
+library(cowplot)
+library(ggpubr)
+library(phytools)
+
+
+prior <- function(params)
+{
+  params.present <- names(params)
+  x0.index <- which(str_detect(params.present,"(X0)|(Theta)"))
+  h.index <- which(str_detect(params.present,"(H)|(Sigma)"))
+  pr <- 0
+  if (length(x0.index) > 0)
+  {
+     pr <- pr + sum(dnorm(params[x0.index],mean=0,sd=1,log=T)) # assuming same prior
+  }
+  if (length(h.index) > 0)
+  {
+     pr  <- pr + sum(dlnorm(params[h.index],meanlog = 0.25,sdlog = 1.5,log=T))
+  }
+  return(pr)
+}
+
+
+# define the log-likelihood distribution
+log_post_OU<- function(par,ll_fun,include.root=T){
+  if (!include.root)
+  {
+    par <- c(NA,NA,par)
+  }
+  ll <- ll_fun(par)
+  pr <- prior(par)
+  return(ll+pr)
+}
+
+set.seed(5)
+```
+
+# Read in tree
+```{r}
+ba.tree <- read.nexus("../Data/tree_11sp_noGpig.nex")
+plot(ba.tree)
+ba.tree <- force.ultrametric(ba.tree,method = "extend")
+plot(ba.tree)
+
+
+```
+
+
+# Testing OU model
+
+## Create tree for OU
+
+```{r}
+tip.heights <- ips::tipHeights(ba.tree)
+sim.tree <- pbtree(n = 50,scale = unname(tip.heights[1]))
+
+```
+
+
+## Simulate data under OU process
+
+```{r}
+
+# Simulate the traits
+x0.a <- 0.25
+x0.b <- -0.1
+theta.a <- 0.5
+theta.b <- -0.2
+sigma.a <- 0.5
+sigma.ab <- 0.1
+sigma.b <- 0.25
+alpha.a <- 0.75
+alpha.b <- 0.5
+alpha.ab <- 0.2
+alpha.ba <- 0.4
+
+true.model <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+true.param <- c(x0.a,x0.b,alpha.a,alpha.ba,alpha.ab,alpha.b,theta.a,theta.b,sigma.a,sigma.ab,sigma.b)
+names(true.param) <- c("X0_A","X0_B","H_A","H_BA","H_AB","H_B","Theta_A","Theta_B","Sigma_A","Sigma_AB","Sigma_B")
+PCMParamLoadOrStore(true.model, true.param, offset=0, load=T)
+
+
+data.pcm <- PCMSim(tree = sim.tree,model = true.model,X0 = true.model$X0)
+```
+
+
+## Set up model with treating root as parameter
+```{r}
+modelOU.w.root <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+
+likFun.w.root <- PCMCreateLikelihood(data.pcm, sim.tree, modelOU.w.root,metaI = PCMInfoCpp)
+true.post <- log_post_OU(par = true.param,ll_fun = likFun.w.root)
+```
+
+### Start MCMC at truth
+
+```{r warning=FALSE}
+
+n.batch <- 50000
+fit.OU.w.root <- MCMC(log_post_OU, n.batch, init = true.param, scale = rep(1,length(true.param)),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun.w.root)
+
+
+
+
+```
+
+```{r}
+# Log Posterior
+plot(fit.OU.w.root$log.p,type="l",ylab="Log(Posterior)")
+abline(h=true.post)
+
+
+# X0
+plot(fit.OU.w.root$samples[,1],type="l",ylab=expression("X"["0,A"]))
+abline(h=x0.a)
+
+plot(fit.OU.w.root$samples[,2],type="l",ylab=expression("X"["0,B"]))
+abline(h=x0.b)
+
+# H matrix
+plot(fit.OU.w.root$samples[,3],type="l",ylab=expression(alpha["A"]))
+abline(h=alpha.a)
+
+plot(fit.OU.w.root$samples[,4],type="l",ylab=expression(alpha["BA"]))
+abline(h=alpha.ba)
+
+plot(fit.OU.w.root$samples[,5],type="l",ylab=expression(alpha["AB"]))
+abline(h=alpha.ab)
+
+plot(fit.OU.w.root$samples[,6],type="l",ylab=expression(alpha["B"]))
+abline(h=alpha.b)
+
+# Theta
+
+plot(fit.OU.w.root$samples[,7],type="l",ylab=expression(theta["A"]))
+abline(h=theta.a)
+
+plot(fit.OU.w.root$samples[,8],type="l",ylab=expression(theta["B"]))
+abline(h=theta.b)
+
+
+# Sigma matrix
+plot(fit.OU.w.root$samples[,9],type="l",ylab=expression(sigma["A"]))
+abline(h=sigma.a)
+
+plot(fit.OU.w.root$samples[,10],type="l",ylab=expression(sigma["AB"]))
+abline(h=sigma.ab)
+
+
+plot(fit.OU.w.root$samples[,11],type="l",ylab=expression(sigma["B"]))
+abline(h=sigma.b)
+
+
+```
+
+## Now fit assuming root state is not a parameter
+
+PCMBase and PCMBaseCpp appear to play nicer with fitting models with the "Global_X0" specified, but making these values NA when calculating the loglikelihood.
+
+```{r}
+modelOU.wo.root <- PCM(model="OU__Global_X0__Schur_WithNonNegativeDiagonal_Transformable_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x",k=2)
+
+likFun.wo.root <- PCMCreateLikelihood(data.pcm, sim.tree, modelOU.wo.root,metaI = PCMInfoCpp)
+true.post <- log_post_OU(par = true.param[3:11],ll_fun = likFun.wo.root,include.root = F)
+```
+
+### Start MCMC at truth
+
+```{r warning=FALSE}
+
+n.batch <- 50000
+fit.OU.wo.root <- MCMC(log_post_OU, n.batch, init = true.param[3:11], scale = rep(1,length(true.param[3:11])),
+            adapt = T, acc.rate = 0.25, gamma = 2/3, ll_fun=likFun.wo.root,include.root = F)
+
+
+
+
+```
+
+
+```{r}
+# Log Posterior
+plot(fit.OU.wo.root$log.p,type="l",ylab="Log(Posterior)")
+abline(h=true.post)
+
+
+# H matrix
+plot(fit.OU.wo.root$samples[,1],type="l",ylab=expression(alpha["A"]))
+abline(h=alpha.a)
+
+plot(fit.OU.wo.root$samples[,2],type="l",ylab=expression(alpha["BA"]))
+abline(h=alpha.ba)
+
+plot(fit.OU.wo.root$samples[,3],type="l",ylab=expression(alpha["AB"]))
+abline(h=alpha.ab)
+
+plot(fit.OU.wo.root$samples[,4],type="l",ylab=expression(alpha["B"]))
+abline(h=alpha.b)
+
+# Theta
+
+plot(fit.OU.wo.root$samples[,5],type="l",ylab=expression(theta["A"]))
+abline(h=theta.a)
+
+plot(fit.OU.wo.root$samples[,6],type="l",ylab=expression(theta["B"]))
+abline(h=theta.b)
+
+
+# Sigma matrix
+plot(fit.OU.wo.root$samples[,7],type="l",ylab=expression(sigma["A"]))
+abline(h=sigma.a)
+
+plot(fit.OU.wo.root$samples[,8],type="l",ylab=expression(sigma["AB"]))
+abline(h=sigma.ab)
+
+
+plot(fit.OU.wo.root$samples[,9],type="l",ylab=expression(sigma["B"]))
+abline(h=sigma.b)
+
+
+```
