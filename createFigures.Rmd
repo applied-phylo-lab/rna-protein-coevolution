@@ -1,0 +1,391 @@
+---
+title: "Create images"
+author: "Alex Cope"
+date: '2023-06-21'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(phytools)
+```
+
+# Plot tree
+
+```{r fig.width=8}
+ba.tree <- read.nexus("/data2/cope/rna-protein-coevolution/Data/tree_11sp_noGpig.nex")
+ba.tree <- force.ultrametric(ba.tree,method="extend")
+d <- ggimage::phylopic_uid(ba.tree$tip.label)
+d <- d %>%
+  mutate(name = case_when(
+      name == "Felis_catus" ~ "Cat",
+      name == "Bos_taurus" ~ "Cow",
+      name == "Canis_lupus" ~ "Dog",
+      name == "Equus_caballus" ~ "Horse",
+      name == "Homo_sapiens" ~ "Human",
+      name == "Macaca_mulatta" ~ "Macaque",
+      name == "Ovis_aries" ~ "Sheep",
+      name == "Sus_scrofa" ~ "Pig",
+      name == "Rattus_norvegicus" ~ "Rat",
+      name == "Monodelphis_domestica" ~ "Opossum",
+      name == "Oryctolagus_cuniculus" ~ "Rabbit"
+    ))
+rownames(d) <- d$name
+
+ba.tree$tip.label <- c("Opossum","Rabbit","Rat","Human","Macaque","Pig","Cow","Sheep","Horse","Cat","Dog")
+```
+
+```{r fig.width=6,fig.height=7}
+d <- d %>% mutate(uid=case_when(
+  name == "Human"~"b8c16fc6-d16b-4fac-8a04-67182448157e",
+  name == "Rat"~"53f8f372-adc0-4247-bc66-0075e241fc95",
+  T ~ uid) 
+)
+
+ba.p <- ggtree(ba.tree) %<+% d + 
+  geom_tiplab(size=6) + 
+  geom_tiplab(aes(image=uid), geom="phylopic", offset=30) +
+  xlim(0,200) + 
+  theme_tree2()
+ba.p
+
+```
+
+
+
+```{r}
+library(ComplexHeatmap)
+data <- read_tsv("/data2/cope/rna-protein-coevolution/Data/mean_se_rna_protein.tsv")
+data <- data %>%
+  mutate(Species = case_when(
+      Species == "Felis_catus" ~ "Cat",
+      Species == "Bos_taurus" ~ "Cow",
+      Species == "Canis_lupus" ~ "Dog",
+      Species == "Equus_caballus" ~ "Horse",
+      Species == "Homo_sapiens" ~ "Human",
+      Species == "Macaca_mulatta" ~ "Macaque",
+      Species == "Ovis_aries" ~ "Sheep",
+      Species == "Sus_scrofa" ~ "Pig",
+      Species == "Rattus_norvegicus" ~ "Rat",
+      Species == "Monodelphis_domestica" ~ "Opossum",
+      Species == "Oryctolagus_cuniculus" ~ "Rabbit"
+    ))
+data.prot.wide <- data %>% 
+  dplyr::select(Gene_ID,Species,Mean_Protein) %>%
+  pivot_wider(id_cols=Gene_ID,names_from="Species",values_from="Mean_Protein")
+data.mrna.wide <- data %>% 
+  dplyr::select(Gene_ID,Species,Mean_RNA) %>%
+  pivot_wider(id_cols=Gene_ID,names_from="Species",values_from="Mean_RNA")
+
+
+pairwise.prot <- cor(data.prot.wide[,2:12],method="spearman")
+pairwise.mrna <- cor(data.mrna.wide[,2:12],method="spearman")
+
+pairwise.prot <- pairwise.prot[ba.tree$tip.label,ba.tree$tip.label]
+pairwise.mrna <- pairwise.mrna[ba.tree$tip.label,ba.tree$tip.label]
+pairwise.prot[upper.tri(pairwise.prot)] <- pairwise.mrna[upper.tri(pairwise.mrna)]
+
+ba.tree.dend <- as.dendrogram(ba.tree)
+
+col <- circlize::colorRamp2(c(min(pairwise.prot)-0.05,median(pairwise.prot,na.rm=T),1),c("red", "white", "blue"))
+diag(pairwise.prot) <- NA
+prot.cor <- Heatmap(pairwise.prot,
+        col=col,
+        na_col = "black",
+        cluster_rows = ba.tree.dend,
+        cluster_columns = F,
+        name = "Spearman\nCorrelation",
+        show_row_names = T,
+        row_names_side = "left",
+        row_title="Protein",
+        column_title="mRNA",
+        )
+
+prot.cor
+
+```
+
+
+```{r}
+phyl.dist <- cophenetic.phylo(ba.tree)
+phyl.dist[upper.tri(phyl.dist,diag = T)] <- NA
+phyl.dist.long <- as.data.frame(phyl.dist) %>%
+  rownames_to_column("Species") %>%
+  pivot_longer(-Species,names_to="Other.species",values_to="Distance") %>%
+  filter(!is.na(Distance))
+pairwise.prot[upper.tri(pairwise.prot,diag = T)] <- NA
+pairwise.prot.long <- as.data.frame(pairwise.prot) %>%
+  rownames_to_column("Species") %>%
+  pivot_longer(-Species,names_to="Other.species",values_to="Correlation") %>%
+  filter(!is.na(Correlation)) %>%
+  mutate(Measure = "Protein")
+
+pairwise.mrna[upper.tri(pairwise.mrna,diag = T)] <- NA
+pairwise.mrna.long <- as.data.frame(pairwise.mrna) %>%
+  rownames_to_column("Species") %>%
+  pivot_longer(-Species,names_to="Other.species",values_to="Correlation") %>%
+  filter(!is.na(Correlation)) %>%
+  mutate(Measure = "mRNA")
+
+pairwise <- rbind(pairwise.prot.long,pairwise.mrna.long)
+
+
+dist.cor <- phyl.dist.long %>%
+  left_join(pairwise)
+dist.cor.prot <- dist.cor %>% filter(Measure == "Protein")
+dist.cor.mrna <- dist.cor %>% filter(Measure == "mRNA")
+```
+
+```{r}
+calculateSlope <- function(data,index)
+{
+  tmp <- data[index,]
+  fm0 <- nls(log(Correlation) ~ log(a*exp(b*Distance)), tmp, start = c(a = 1, b = 1))
+  return(coef(fm0))
+}
+
+
+fm0.true <- nls(Correlation ~ a*exp(b*Distance), dist.cor.prot, start = c(a = 0.8, b = 0))
+fm1.true <- nls(Correlation ~ a*exp(b*Distance), dist.cor.mrna, start = c(a = 0.8, b = 0))
+
+preds.prot <- preds.mrna <- data.frame(Distance = unique(phyl.dist.long$Distance))
+prop <- propagate::predictNLS(fm0.true, newdata = preds.prot)
+preds.prot$mean <- prop$summary[,2]
+preds.prot$lcl <- prop$summary[,5]
+preds.prot$ucl <- prop$summary[,6]
+preds.prot$Measure <- "Protein"
+
+prop <- propagate::predictNLS(fm1.true, newdata = preds.mrna)
+preds.mrna$mean <- prop$summary[,2]
+preds.mrna$lcl <- prop$summary[,5]
+preds.mrna$ucl <- prop$summary[,6]
+preds.mrna$Measure <- "mRNA"
+
+preds <- rbind(preds.prot,preds.mrna)
+
+dist.cor <- dist.cor %>%
+  left_join(preds,by=c("Measure","Distance"))
+
+boot.prot <- boot(data=dist.cor.prot,
+                  statistic = calculateSlope,
+                  R = 1000)
+boot.mrna <- boot(data=dist.cor.mrna,
+                  statistic = calculateSlope,
+                  R = 1000)
+
+p <- ggplot(dist.cor,aes(x=Distance,y=Correlation,shape=Measure,color=Measure)) +
+  geom_point() +
+  stat_cor(method="spearman",show.legend = F,label.x = 180) +
+  theme_cowplot() +
+  theme(aspect.ratio=1) +
+  geom_smooth(method="nls",formula=y ~ a*exp(b*x),method.args=list(start = c(a = 0.8, b = 0)),se=F) +
+  geom_ribbon(aes(x = Distance, y = mean, ymin = lcl, ymax = ucl,color=Measure),
+              color="black",alpha=0.25) +
+  ggtitle("More diverged mammals show greater\ndivergence in gene expression") +
+  xlab("Divergence Time (MYA)") +
+  ylab("Pairwise Similarity\n(Spearman Correlation)")
+p
+
+```
+
+
+```{r}
+library(broom)
+calculatePIC <- function(data,tree)
+{
+  
+  pic.value <- pic(data,tree,var.contrasts = T)
+  corr <- cor.test(pic.value[,1],sqrt(pic.value[,2]),method="spearman",use="complete.obs")
+  return(pic.value)
+}
+
+across.species.corr. <- data %>% 
+  group_by(Gene_ID) %>% 
+  nest(-Gene_ID) %>% 
+  mutate(corr = purrr::map(data,function(x)
+    {
+      tmp <- x %>% column_to_rownames("Species") %>% 
+        dplyr::select(Mean_RNA,Mean_Protein) %>% 
+        dplyr::filter(!is.na(Mean_RNA) & !is.na(Mean_Protein)) %>%
+        as.matrix()
+      cleaned <- CleanData(ba.tree,tmp)
+      x <- cleaned$data
+      tmp.tree <- cleaned$phy
+      rna.values <- x[,"Mean_RNA"]
+      protein.values <- x[,"Mean_Protein"]
+      rna.pic <- calculatePIC(rna.values[tmp.tree$tip.label],tree = tmp.tree)
+      protein.pic <- calculatePIC(protein.values[tmp.tree$tip.label],tree=tmp.tree)
+      cor.test(rna.pic[,1],protein.pic[,1],method="spearman") 
+    } %>% tidy())) %>% 
+  dplyr::select(-data) %>% 
+  unnest(corr,names_sep="_") %>%
+  arrange(corr_estimate)
+
+
+mrna.vs.prot.cor <- ggplot(across.species.corr.,aes(x=corr_estimate)) +
+  geom_histogram(color="black",fill="white") +
+  ggtitle("Variation in correlation between mRNA\nand protein abundances across species") +
+  xlab("Spearman Correlation (PIC)") +
+  ylab("Count") +
+  theme_cowplot() +
+  theme(aspect.ratio=1)
+mrna.vs.prot.cor
+```
+
+```{r fig.width=6}
+library(patchwork)
+
+fig3 <- (p | mrna.vs.prot.cor) + plot_annotation(tag_level="A")
+fig3
+
+
+```
+
+
+```{r}
+load("/data2/cope/rna-protein-coevolution/Results/Real_data_prot_determines_mrna_corrected_proposals/rwm_mcmc_total.Rda")
+
+alpha.b <- fit$Posterior2[,1:5]
+hlf.trace <- apply(alpha.b,1,function(x)
+  {
+   tmp <- matrix(c(exp(x[1]),0,-exp(x[1])*x[3],exp(x[2])),nrow=2)
+   lambda<-eigen(tmp)$values
+   phyhalflife<-log(2)/Re(lambda)
+   phyhalflife
+})
+hlf.trace <- t(hlf.trace) 
+colnames(hlf.trace) <- c("mRNA","Protein")
+hlf.df <- hlf.trace %>% as.data.frame() %>% pivot_longer(cols=everything(),
+                                                         names_to="Trait",
+                                                         values_to="Halflife")
+
+```
+
+
+```{r fig.width=6, fig.height=6}
+library(patchwork)
+tip.height <- ips::tipHeights(ba.tree)[1]
+
+hlf.plot <- ggplot(hlf.df,aes(x=Halflife,fill=Trait)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of phylogenetic half-lives") +
+  xlab("Phylogenetic half-life") +
+  ylab("Count") +
+  theme_cowplot()
+
+hlf.plot
+
+
+hlf.plot.rel <- ggplot(hlf.df,aes(x=Halflife/tip.height,fill=Trait)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of phylogenetic half-lives\nrelative to tree height") +
+  xlab("Phylogenetic half-life\n(relative to tree height)") +
+  ylab("Count") +
+  theme_cowplot()
+
+hlf.plot.rel
+
+
+slope.trace <- data.frame(Sample=1:nrow(fit$Posterior2),Q=alpha.b[,"Q"])
+slope.plot <- ggplot(slope.trace,aes(x=Q)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of Slope") +
+  xlab("Slope") +
+  ylab("Count") +
+  theme_cowplot()
+slope.plot
+
+sigma.trace <- data.frame(Sample=1:nrow(fit$Posterior2),mRNA=exp(alpha.b[,"Sigma_Y"]),Protein=exp(alpha.b[,"Sigma_X"]))
+sigma.df <- sigma.trace %>% pivot_longer(-Sample,names_to="Trait",values_to="Sigma")
+
+sigma.plot <- ggplot(sigma.df,aes(x=Sigma,fill=Trait)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of Sigma") +
+  xlab("Sigma") +
+  ylab("Count") +
+  theme_cowplot()
+sigma.plot
+
+total <- (hlf.plot | hlf.plot.rel) / (slope.plot | sigma.plot) + plot_annotation(tag_levels ="A")
+total
+```
+
+
+```{r}
+load("/data2/cope/rna-protein-coevolution/Results/Real_data_mrna_determines_prot_off_diagonal_sigma_prior_based_on_tree/rwm_mcmc_1.Rda")
+
+
+
+alpha.b <- fit$Posterior2[,1:6]
+
+hlf.trace <- apply(alpha.b,1,function(x)
+  {
+   tmp <- matrix(c(exp(x[1]),0, exp(x[1])*x[4]-exp(x[2])*x[3],exp(x[2])),nrow=2)
+   lambda<-eigen(tmp)$values
+   phyhalflife<-log(2)/Re(lambda)
+   phyhalflife
+})
+hlf.trace <- t(hlf.trace) 
+colnames(hlf.trace) <- c("mRNA","Protein")
+hlf.df <- hlf.trace %>% as.data.frame() %>% pivot_longer(cols=everything(),
+                                                         names_to="Trait",
+                                                         values_to="Halflife")
+
+```
+
+
+```{r fig.width=6, fig.height=6}
+tip.height <- ips::tipHeights(ba.tree)[1]
+
+hlf.plot <- ggplot(hlf.df,aes(x=Halflife,fill=Trait)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of phylogenetic half-lives") +
+  xlab("Phylogenetic half-life") +
+  ylab("Count") +
+  theme_cowplot() +
+  facet_wrap(~Trait)
+
+hlf.plot
+
+
+hlf.plot.rel <- ggplot(hlf.df,aes(x=Halflife/tip.height,fill=Trait)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of phylogenetic half-lives\nrelative to tree height") +
+  xlab("Phylogenetic half-life\n(relative to tree height)") +
+  ylab("Count") +
+  theme_cowplot()
+
+hlf.plot.rel
+
+
+slope.trace <- data.frame(Sample=1:nrow(fit$Posterior2),Q=alpha.b[,"Q"])
+slope.plot <- ggplot(slope.trace,aes(x=Q)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of Slope") +
+  xlab("Slope") +
+  ylab("Count") +
+  theme_cowplot()
+slope.plot
+
+c.trace <- data.frame(Sample=1:nrow(fit$Posterior2),C=alpha.b[,"C"])
+c.plot <- ggplot(c.trace,aes(x=C)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of C") +
+  xlab("Slope") +
+  ylab("Count") +
+  theme_cowplot()
+c.plot
+
+sigma.trace <- data.frame(Sample=1:nrow(fit$Posterior2),mRNA=exp(alpha.b[,"Sigma_Y"]),Protein=exp(alpha.b[,"Sigma_X"]))
+sigma.df <- sigma.trace %>% pivot_longer(-Sample,names_to="Trait",values_to="Sigma")
+
+sigma.plot <- ggplot(sigma.df,aes(x=Sigma,fill=Trait)) +
+  geom_histogram(color="black") +
+  ggtitle("Posterior distributions of Sigma") +
+  xlab("Sigma") +
+  ylab("Count") +
+  theme_cowplot()
+sigma.plot
+
+```
