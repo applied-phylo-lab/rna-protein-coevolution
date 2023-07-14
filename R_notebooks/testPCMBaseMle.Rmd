@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(ape)
 library(PCMBase,lib.loc = "~/R_dev")
-library(PCMBaseCpp)
+library(PCMBaseCpp,lib.loc="~/R_dev")
 library(tidyverse)
 library(cowplot)
 library(bbmle)
