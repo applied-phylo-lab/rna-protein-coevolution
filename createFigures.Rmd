@@ -9,12 +9,38 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(phytools)
+library(ggtree)
+library(cowplot)
+library(patchwork)
+library(dendextend)
+library(ComplexHeatmap)
+
+CleanData <- function(phy, data) {
+  cleaned <- geiger::treedata(phy,data,warnings=T)
+  return(cleaned)
+}
+
+createSummaryFileForTargets <- function(mcmc.r.object.file,
+                              output = "./summary.tsv")
+{
+  load(mcmc.r.object.file)
+  fit.summary <- as.data.frame(fit$Summary2) %>%
+    rownames_to_column("Parameter")
+  rm(fit)
+  write_tsv(fit.summary,output)
+}
+
+
+mrna.color <- "#EE6677"
+prot.color <- "#AA3377"
+slope.color <- "#CCBB44"
+
 ```
 
 # Plot tree
 
 ```{r fig.width=8}
-ba.tree <- read.nexus("/data2/cope/rna-protein-coevolution/Data/tree_11sp_noGpig.nex")
+ba.tree <- read.nexus("Data/tree_11sp_noGpig.nex")
 ba.tree <- force.ultrametric(ba.tree,method="extend")
 d <- ggimage::phylopic_uid(ba.tree$tip.label)
 d <- d %>%
@@ -36,27 +62,46 @@ rownames(d) <- d$name
 ba.tree$tip.label <- c("Opossum","Rabbit","Rat","Human","Macaque","Pig","Cow","Sheep","Horse","Cat","Dog")
 ```
 
-```{r fig.width=6,fig.height=7}
+```{r fig.width=5,fig.height=5}
 d <- d %>% mutate(uid=case_when(
   name == "Human"~"b8c16fc6-d16b-4fac-8a04-67182448157e",
   name == "Rat"~"53f8f372-adc0-4247-bc66-0075e241fc95",
   T ~ uid) 
 )
 
+ba.tree <- drop.tip(ba.tree,"Human")
+
 ba.p <- ggtree(ba.tree) %<+% d + 
   geom_tiplab(size=6) + 
   geom_tiplab(aes(image=uid), geom="phylopic", offset=30) +
   xlim(0,200) + 
-  theme_tree2()
+  theme_tree2() +
+  theme(axis.text=element_text(size=14,face="bold"))
 ba.p
+ggsave2("Figures/ba_etal_tree.pdf",ba.p,width=9)
+
+
+```
+
+```{r fig.width=4,fig.height=8}
+
+
+ba.tree.filt <- drop.tip(ba.tree,c("Dog","Horse","Sheep","Cow","Pig","Rabbit","Cat","Human"))
+
+ba.filt.p <- ggtree(ba.tree.filt) %<+% d + 
+  geom_tiplab(size=0) + 
+  geom_tiplab(aes(image=uid),size=0.2, geom="phylopic", offset=60) +
+  xlim(c(NA,300)) +
+  theme(axis.text=element_blank())
+ba.filt.p
 
 ```
 
 
 
 ```{r}
-library(ComplexHeatmap)
-data <- read_tsv("/data2/cope/rna-protein-coevolution/Data/mean_se_rna_protein.tsv")
+
+data <- read_tsv("Data/mean_se_rna_protein.tsv")
 data <- data %>%
   mutate(Species = case_when(
       Species == "Felis_catus" ~ "Cat",
@@ -70,7 +115,8 @@ data <- data %>%
       Species == "Rattus_norvegicus" ~ "Rat",
       Species == "Monodelphis_domestica" ~ "Opossum",
       Species == "Oryctolagus_cuniculus" ~ "Rabbit"
-    ))
+    )) %>%
+  filter(Species != "Human")
 data.prot.wide <- data %>% 
   dplyr::select(Gene_ID,Species,Mean_Protein) %>%
   pivot_wider(id_cols=Gene_ID,names_from="Species",values_from="Mean_Protein")
@@ -79,8 +125,8 @@ data.mrna.wide <- data %>%
   pivot_wider(id_cols=Gene_ID,names_from="Species",values_from="Mean_RNA")
 
 
-pairwise.prot <- cor(data.prot.wide[,2:12],method="spearman")
-pairwise.mrna <- cor(data.mrna.wide[,2:12],method="spearman")
+pairwise.prot <- cor(data.prot.wide[,2:11],method="spearman")
+pairwise.mrna <- cor(data.mrna.wide[,2:11],method="spearman")
 
 pairwise.prot <- pairwise.prot[ba.tree$tip.label,ba.tree$tip.label]
 pairwise.mrna <- pairwise.mrna[ba.tree$tip.label,ba.tree$tip.label]
@@ -88,7 +134,7 @@ pairwise.prot[upper.tri(pairwise.prot)] <- pairwise.mrna[upper.tri(pairwise.mrna
 
 ba.tree.dend <- as.dendrogram(ba.tree)
 
-col <- circlize::colorRamp2(c(min(pairwise.prot)-0.05,median(pairwise.prot,na.rm=T),1),c("red", "white", "blue"))
+col <- circlize::colorRamp2(c(min(pairwise.prot)-0.05,median(pairwise.prot,na.rm=T),1),c("#B2182B", "#F7F7F7", "#2166AC"))
 diag(pairwise.prot) <- NA
 prot.cor <- Heatmap(pairwise.prot,
         col=col,
@@ -103,7 +149,9 @@ prot.cor <- Heatmap(pairwise.prot,
         )
 
 prot.cor
-
+pdf("Figures/across_species_correlations.pdf",height=7,width=8)
+prot.cor
+dev.off()
 ```
 
 
@@ -150,45 +198,50 @@ fm0.true <- nls(Correlation ~ a*exp(b*Distance), dist.cor.prot, start = c(a = 0.
 fm1.true <- nls(Correlation ~ a*exp(b*Distance), dist.cor.mrna, start = c(a = 0.8, b = 0))
 
 preds.prot <- preds.mrna <- data.frame(Distance = unique(phyl.dist.long$Distance))
-prop <- propagate::predictNLS(fm0.true, newdata = preds.prot)
-preds.prot$mean <- prop$summary[,2]
-preds.prot$lcl <- prop$summary[,5]
-preds.prot$ucl <- prop$summary[,6]
-preds.prot$Measure <- "Protein"
+#prop <- propagate::predictNLS(fm0.true, newdata = preds.prot)
+#preds.prot$mean <- prop$summary[,2]
+#preds.prot$lcl <- prop$summary[,5]
+#preds.prot$ucl <- prop$summary[,6]
+#preds.prot$Measure <- "Protein"
 
-prop <- propagate::predictNLS(fm1.true, newdata = preds.mrna)
-preds.mrna$mean <- prop$summary[,2]
-preds.mrna$lcl <- prop$summary[,5]
-preds.mrna$ucl <- prop$summary[,6]
-preds.mrna$Measure <- "mRNA"
+#prop <- propagate::predictNLS(fm1.true, newdata = preds.mrna)
+#preds.mrna$mean <- prop$summary[,2]
+#preds.mrna$lcl <- prop$summary[,5]
+#preds.mrna$ucl <- prop$summary[,6]
+#preds.mrna$Measure <- "mRNA"
 
-preds <- rbind(preds.prot,preds.mrna)
+#preds <- rbind(preds.prot,preds.mrna)
 
-dist.cor <- dist.cor %>%
-  left_join(preds,by=c("Measure","Distance"))
+#dist.cor <- dist.cor %>%
+#  left_join(preds,by=c("Measure","Distance"))
 
-boot.prot <- boot(data=dist.cor.prot,
-                  statistic = calculateSlope,
-                  R = 1000)
-boot.mrna <- boot(data=dist.cor.mrna,
-                  statistic = calculateSlope,
-                  R = 1000)
 
-p <- ggplot(dist.cor,aes(x=Distance,y=Correlation,shape=Measure,color=Measure)) +
+div.p <- ggplot(dist.cor,aes(x=Distance,y=Correlation,color=Measure)) +
   geom_point() +
-  stat_cor(method="spearman",show.legend = F,label.x = 180) +
   theme_cowplot() +
-  theme(aspect.ratio=1) +
-  geom_smooth(method="nls",formula=y ~ a*exp(b*x),method.args=list(start = c(a = 0.8, b = 0)),se=F) +
-  geom_ribbon(aes(x = Distance, y = mean, ymin = lcl, ymax = ucl,color=Measure),
-              color="black",alpha=0.25) +
-  ggtitle("More diverged mammals show greater\ndivergence in gene expression") +
+  # geom_smooth(method="nls",formula=y ~ a*exp(b*x),method.args=list(start = c(a = 0.8, b = 0)),se=F) +
+  # geom_ribbon(aes(x = Distance, y = mean, ymin = lcl, ymax = ucl,color=Measure),
+  #             color="black",alpha=0.25) +
+  #ggtitle("Divergence in gene expression as\nfunction of evolutionary divergence") +
+  scale_color_manual(values = c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  labs(color="Expression type") +
   xlab("Divergence Time (MYA)") +
   ylab("Pairwise Similarity\n(Spearman Correlation)")
-p
+div.p
 
 ```
 
+
+
+```{r fig.width =12,fig.height=6}
+p <- ((plot_spacer() | grid.grabExpr(draw(prot.cor),wrap = T,wrap.grobs = T)) | (div.p))  +
+  plot_annotation(tag_levels = "A") + 
+  plot_layout(widths = c(0,1.5,1),guides = "collect") 
+p
+
+ggsave2("Figures/Figure_2.pdf",p,width=14,height = 5)
+
+```
 
 ```{r}
 library(broom)
@@ -231,6 +284,8 @@ mrna.vs.prot.cor <- ggplot(across.species.corr.,aes(x=corr_estimate)) +
   theme_cowplot() +
   theme(aspect.ratio=1)
 mrna.vs.prot.cor
+
+ggsave2("Figures/mrna_protein_corr_across_species_pic.pdf",mrna.vs.prot.cor)
 ```
 
 ```{r fig.width=6}
@@ -244,148 +299,771 @@ fig3
 
 
 ```{r}
-load("/data2/cope/rna-protein-coevolution/Results/Real_data_prot_determines_mrna_corrected_proposals/rwm_mcmc_total.Rda")
+load("Results/Drop_human/Pop_average_model_all/Protein_selection_strong/2024-02-05_prot_determines_mrna_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+prot.dom.fit <- fit
+load("Results/Drop_human/Pop_average_model_all/Protein_selection_weak/2024-02-05_mrna_determines_prot_off_diagonal_sigma_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+mrna.dom.fit <- fit
+load("Results/Drop_human/Pop_average_model_all/Independent/2024-02-05_independent_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+indep.fit <- fit
 
-alpha.b <- fit$Posterior2[,1:5]
-hlf.trace <- apply(alpha.b,1,function(x)
-  {
-   tmp <- matrix(c(exp(x[1]),0,-exp(x[1])*x[3],exp(x[2])),nrow=2)
-   lambda<-eigen(tmp)$values
-   phyhalflife<-log(2)/Re(lambda)
-   phyhalflife
-})
-hlf.trace <- t(hlf.trace) 
-colnames(hlf.trace) <- c("mRNA","Protein")
-hlf.df <- hlf.trace %>% as.data.frame() %>% pivot_longer(cols=everything(),
-                                                         names_to="Trait",
-                                                         values_to="Halflife")
-
-```
-
-
-```{r fig.width=6, fig.height=6}
-library(patchwork)
-tip.height <- ips::tipHeights(ba.tree)[1]
-
-hlf.plot <- ggplot(hlf.df,aes(x=Halflife,fill=Trait)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of phylogenetic half-lives") +
-  xlab("Phylogenetic half-life") +
-  ylab("Count") +
-  theme_cowplot()
-
-hlf.plot
-
-
-hlf.plot.rel <- ggplot(hlf.df,aes(x=Halflife/tip.height,fill=Trait)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of phylogenetic half-lives\nrelative to tree height") +
-  xlab("Phylogenetic half-life\n(relative to tree height)") +
-  ylab("Count") +
-  theme_cowplot()
-
-hlf.plot.rel
-
-
-slope.trace <- data.frame(Sample=1:nrow(fit$Posterior2),Q=alpha.b[,"Q"])
-slope.plot <- ggplot(slope.trace,aes(x=Q)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of Slope") +
-  xlab("Slope") +
-  ylab("Count") +
-  theme_cowplot()
-slope.plot
-
-sigma.trace <- data.frame(Sample=1:nrow(fit$Posterior2),mRNA=exp(alpha.b[,"Sigma_Y"]),Protein=exp(alpha.b[,"Sigma_X"]))
-sigma.df <- sigma.trace %>% pivot_longer(-Sample,names_to="Trait",values_to="Sigma")
-
-sigma.plot <- ggplot(sigma.df,aes(x=Sigma,fill=Trait)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of Sigma") +
-  xlab("Sigma") +
-  ylab("Count") +
-  theme_cowplot()
-sigma.plot
-
-total <- (hlf.plot | hlf.plot.rel) / (slope.plot | sigma.plot) + plot_annotation(tag_levels ="A")
-total
+prot.dom.fit$DIC2 - mrna.dom.fit$DIC2
+prot.dom.fit$DIC2 - indep.fit$DIC2
 ```
 
 
 ```{r}
-load("/data2/cope/rna-protein-coevolution/Results/Real_data_mrna_determines_prot_off_diagonal_sigma_prior_based_on_tree/rwm_mcmc_1.Rda")
+dic.scores <- c(prot.dom.fit$DIC2[3],mrna.dom.fit$DIC2[3],indep.fit$DIC2[3])
+min.dic <- dic.scores[which.min(dic.scores)]
+delta.dic <- dic.scores - min.dic
+
+dic.df <- data.frame(Model =c("Protein-driven","mRNA-driven","Independent"),
+                     DIC = dic.scores,
+                     Delta.DIC = delta.dic) %>%
+  filter(Delta.DIC != 0 )
+dic.bar <- ggplot(dic.df,aes(x=Model,y=Delta.DIC,fill=Model)) +
+  geom_col(color="black") +
+  theme_cowplot() +
+  ylab(expression(Delta*"DIC (DIC - DIC"["Protein-driven"]*")")) +
+  xlab("") +
+  scale_fill_manual(values=c("Protein-driven"=prot.color,"mRNA-driven"=mrna.color,"Independent"="#4477AA")) +
+  theme(axis.text.x = element_blank()) 
+dic.bar
+```
 
 
 
-alpha.b <- fit$Posterior2[,1:6]
+
+```{r}
+alpha.b <- prot.dom.fit$Posterior2[,1:5]
 
 hlf.trace <- apply(alpha.b,1,function(x)
   {
-   tmp <- matrix(c(exp(x[1]),0, exp(x[1])*x[4]-exp(x[2])*x[3],exp(x[2])),nrow=2)
+   tmp <- matrix(c(exp(x[1]),0,-exp(x[2])*x[3],exp(x[2])),nrow=2)
    lambda<-eigen(tmp)$values
    phyhalflife<-log(2)/Re(lambda)
    phyhalflife
 })
 hlf.trace <- t(hlf.trace) 
 colnames(hlf.trace) <- c("mRNA","Protein")
-hlf.df <- hlf.trace %>% as.data.frame() %>% pivot_longer(cols=everything(),
-                                                         names_to="Trait",
-                                                         values_to="Halflife")
+hlf.df <- hlf.trace %>% 
+  as.data.frame() %>% 
+  pivot_longer(cols=everything(),names_to="Abundance",values_to="Halflife")
+
+mean.hlf <- apply(hlf.trace,MARGIN = 2,FUN = mean)
+ci.hlf <- p.interval(hlf.trace)
 
 ```
 
+```{r}
+library(LaplacesDemon,lib.loc="~/R_dev/")
+param.names <- colnames(alpha.b)
+alpha.b.nat.scale <- sapply(param.names,function(x)
+  {
+    if (x != "Q")
+    {
+      exp(alpha.b[,x])
+    } else {
+      alpha.b[,x]
+    }
+})
 
-```{r fig.width=6, fig.height=6}
-tip.height <- ips::tipHeights(ba.tree)[1]
+mean.nat.scale <- apply(alpha.b.nat.scale,MARGIN = 2,FUN = mean)
+ci.nat.scale <- p.interval(alpha.b.nat.scale)
+ci.nat.scale
 
-hlf.plot <- ggplot(hlf.df,aes(x=Halflife,fill=Trait)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of phylogenetic half-lives") +
-  xlab("Phylogenetic half-life") +
+```
+
+```{r fig.width=8,fig.height=3}
+
+alpha.param <- exp(alpha.b[,c(1,2)])
+colnames(alpha.param) <- c("mRNA","Protein")
+alpha.df <- alpha.param %>% as.data.frame() %>% pivot_longer(cols=everything(),
+                                                         names_to="Abundance",
+                                                         values_to="Selection")
+alpha.plot <- ggplot(alpha.df,aes(x=Selection,fill=Abundance)) +
+  geom_histogram(color="black",position="identity",alpha=0.8) +
+  xlab("Rate of adaptation") +
   ylab("Count") +
-  theme_cowplot() +
-  facet_wrap(~Trait)
+  labs(fill="Expression type") +
+  scale_fill_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color))+
+  theme_cowplot()
+
+alpha.plot
+
+
+hlf.plot <- ggplot(hlf.df,aes(x=Halflife,fill=Abundance)) +
+  geom_histogram(color="black",alpha=0.8) +
+  xlab("Phylogenetic half-life (MY)") +
+  labs(fill="Expression type") +
+  ylab("Count") +
+  scale_fill_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot()
 
 hlf.plot
 
 
-hlf.plot.rel <- ggplot(hlf.df,aes(x=Halflife/tip.height,fill=Trait)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of phylogenetic half-lives\nrelative to tree height") +
-  xlab("Phylogenetic half-life\n(relative to tree height)") +
+slope.df <- data.frame(Distribution="Posterior",Q=alpha.b[,"Q"])
+
+slope.plot <- ggplot(slope.df,aes(x=Q)) +
+  geom_histogram(fill=slope.color,color="black",position="identity") +
+  xlab(expression(atop("Evolutionary slope a"[R],"mRNA per protein"))) +
   ylab("Count") +
-  theme_cowplot()
-
-hlf.plot.rel
-
-
-slope.trace <- data.frame(Sample=1:nrow(fit$Posterior2),Q=alpha.b[,"Q"])
-slope.plot <- ggplot(slope.trace,aes(x=Q)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of Slope") +
-  xlab("Slope") +
-  ylab("Count") +
-  theme_cowplot()
+  cowplot::theme_cowplot()
 slope.plot
 
-c.trace <- data.frame(Sample=1:nrow(fit$Posterior2),C=alpha.b[,"C"])
-c.plot <- ggplot(c.trace,aes(x=C)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of C") +
-  xlab("Slope") +
-  ylab("Count") +
-  theme_cowplot()
-c.plot
+tau.trace <- data.frame(mRNA=exp(alpha.b[,"Sigma_Y"]),Protein=exp(alpha.b[,"Sigma_X"]))
+tau.df <- tau.trace %>% 
+  pivot_longer(everything(),names_to="Abundance",values_to="Sigma")
 
-sigma.trace <- data.frame(Sample=1:nrow(fit$Posterior2),mRNA=exp(alpha.b[,"Sigma_Y"]),Protein=exp(alpha.b[,"Sigma_X"]))
-sigma.df <- sigma.trace %>% pivot_longer(-Sample,names_to="Trait",values_to="Sigma")
-
-sigma.plot <- ggplot(sigma.df,aes(x=Sigma,fill=Trait)) +
-  geom_histogram(color="black") +
-  ggtitle("Posterior distributions of Sigma") +
-  xlab("Sigma") +
+tau.plot <- ggplot(tau.df,aes(x=Sigma,fill=Abundance)) +
+  geom_histogram(color="black",position="identity",alpha=0.8) +
+  xlab("Rate of drift") +
   ylab("Count") +
+  labs(fill="Expression type") +
+  scale_fill_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color))+
   theme_cowplot()
-sigma.plot
+tau.plot
+
+
+```
+
+```{r fig.width=10, fig.height=10}
+total <- (dic.bar + alpha.plot + plot_layout(widths = c(1,1.9))) / (slope.plot | tau.plot) + plot_annotation(tag_levels ="A")
+ggsave2("Figures/Figure_3.pdf",total,width=10,height = 7.25)
+```
+
+
+
+
+
+
+### Check for consistency across runs
+
+Here, I will be looking at the runs where the human species is dropped from our analysis.
+
+
+```{r}
+
+createSummaryFile <- function(file.path.to.runs)
+{
+  r.object.files <- list.files(file.path.to.runs,recursive = T,pattern="rwm_mcmc_1.Rda",full.names = T)
+
+  output <- str_split(r.object.files ,"/")
+  output <- lapply(output,function(x){
+    filepath <- paste(x[1:(length(x) - 1)],collapse="/")
+    filepath <- paste(filepath,"summary.tsv",sep="/")
+    filepath
+  })
+  
+  
+  purrr::map2(r.object.files ,output,createSummaryFileForTargets)
+}
+
+createSummaryFile("Results/Drop_human/Pop_average_model/Protein_selection_strong")
+createSummaryFile("Results/Drop_human/Pop_average_model/Protein_selection_weak")
+createSummaryFile("Results/Drop_human/Pop_average_model/Independent/")
+
+
+
+
+```
+
+
+```{r}
+library(scales)
+# model should be "Protein Dominant", "mRNA Dominant", "Independent"
+convertParameterSymbolsToPaperSymbols <- function(parameter.names,model = "Protein Dominant")
+{
+  prot.dom.list <- list("H_Y"="alpha","H_X"="beta","Q" = "a[R]","Sigma_Y"="tau[R]","Sigma_X"="tau[P]")
+  mrna.dom.list <-list("H_Y"="beta","H_X"="alpha","C"="c","Q" = "a[P]","Sigma_Y"="tau[P]","Sigma_X"="tau[R]")
+  indep.list <- list("H_Y"="alpha","H_X"="beta","Sigma_Y"="tau[R]","Sigma_X"="tau[P]")
+  if (model == "Protein Dominant")
+  {
+    name.map <- prot.dom.list[parameter.names]
+  } else if (model == "mRNA Dominant") {
+    name.map <- mrna.dom.list[parameter.names]
+  } else if (model == "Independent") {
+    name.map <- indep.list[parameter.names]
+  } else{
+    print("Model name not one of the three options: Protein Dominant, mRNA Dominant, or Independent. Returning NA")
+    name.map <- NA
+  }
+  return(unname(unlist(name.map)))
+}
+
+
+
+compareParameterEstimatesAcrossRuns <- function(file.path.to.summary.files,
+                                                model="Protein Dominant")
+{
+  prot.sel.strong.summary.files <- list.files(file.path.to.summary.files,
+                                            recursive = T,
+                                            pattern = "summary.tsv",
+                                            full.names = T) 
+
+  names(prot.sel.strong.summary.files) <- paste("Run",1:length(prot.sel.strong.summary.files),sep="_")
+  
+  prot.sel.strong.param <- lapply(prot.sel.strong.summary.files,read_tsv) %>%
+    bind_rows(.id="Run")
+  
+  
+  param <- c("H_X","H_Y","Q","C","Sigma_X","Sigma_Y")
+  prot.sel.strong.pop.param <- prot.sel.strong.param %>% 
+    filter(Parameter %in% param) %>%
+    mutate(Parameter = convertParameterSymbolsToPaperSymbols(Parameter,model=model))
+
+  p <- ggplot(prot.sel.strong.pop.param,aes(x=Parameter,y=Mean,color=Run)) +
+    geom_point(position=position_dodge(width=0.5),size=2) +
+    geom_errorbar(aes(ymin=LB,ymax=UB),position=position_dodge(width=0.5),width=0.2) +
+    theme_cowplot() +
+    ylab("Posterior Mean") +
+    ggtitle(model) +
+    scale_x_discrete(labels=label_parse()) +
+    ylim(c(-5,1))
+  p
+}
+
+prot.sel.strong.p <- compareParameterEstimatesAcrossRuns("Results/Drop_human/Pop_average_model_all/Protein_selection_strong/",
+                                    model="Protein Dominant")
+
+prot.sel.weak.p <- compareParameterEstimatesAcrossRuns("Results/Drop_human/Pop_average_model_all/Protein_selection_weak/",
+                                    model="mRNA Dominant")
+
+indep.p <- compareParameterEstimatesAcrossRuns("Results/Drop_human/Pop_average_model_all/Independent//",
+                                    model = "Independent")
+
+
+```
+
+```{r fig.width=10,fig.height=3}
+
+comb.plot <- (prot.sel.strong.p | prot.sel.weak.p | indep.p) + 
+  plot_annotation(tag_levels = "A") + 
+  plot_layout(guides="collect")
+
+comb.plot
+
+ggsave2("Figures/convergence_across_mcmc_runs.pdf",comb.plot,width=15,height=5)
+
+```
+
+### Assess impact of gene expression
+
+The impact of gene expression on the evolutionary patterns observed across species of orthologous proteins is well-established. 
+
+```{r}
+
+
+getDIC <- function(filepath.mcmc.object)
+{
+  load(filepath.mcmc.object)
+  return(data.frame(Deviance = fit$DIC1[1],Eff.Num.Param=fit$DIC1[2],DIC = fit$DIC1[3]))
+}
+
+getSummaryTable <- function(filepath.mcmc.object)
+{
+  load(filepath.mcmc.object)
+  fit.summary <- as.data.frame(fit$Summary2) %>%
+    rownames_to_column("Parameter") %>%
+    as.data.frame()
+  return(fit.summary)
+}
+
+extractRunNameFromFilePath <- function(filepath,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+")
+{
+ return(str_extract(filepath,pattern=pattern))
+}
+
+createDICTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+")
+{
+  names(filepaths.mcmc.obj) <- extractRunNameFromFilePath(mcmc.rda,pattern=pattern)
+  dic.table <- lapply(filepaths.mcmc.obj,getDIC) %>%
+    bind_rows(.id="Data-Model_Fit")
+  dic.table <- dic.table %>%
+    separate(`Data-Model_Fit`,sep="/",into = c("Data","Model_Fit"))
+  return(dic.table)
+}
+
+createParamTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+")
+{
+  names(filepaths.mcmc.obj) <- extractRunNameFromFilePath(mcmc.rda,pattern=pattern)
+  param.table <- lapply(filepaths.mcmc.obj,getSummaryTable) %>%
+    bind_rows(.id="Data-Model_Fit")
+  param.table <- param.table %>%
+    separate(`Data-Model_Fit`,sep="/",into = c("Data","Model_Fit"))
+  return(param.table)
+}
+
+makePlots <- function(param.table,
+                      xlab="Gene Expression Bin", 
+                      ylab="Posterior Mean",
+                      title = c(""))
+{
+  param.table.selection <- param.table %>%
+    filter((Parameter == "H_X" | Parameter == "H_Y")  & Model_Fit == "Protein_selection_strong") %>%
+    mutate(Parameter = ifelse(Parameter == "H_X","Protein","mRNA"))
+
+  selec.p <- ggplot(param.table.selection,aes(x=Data,y=Mean,color=Parameter)) +
+    geom_point(position=position_dodge(width=0.5)) +
+    geom_errorbar(aes(ymin=LB,ymax=UB),width=0,position=position_dodge(width=0.5)) +
+    theme_cowplot() +
+    xlab("Gene Expression Bin") +
+    ylab("Posterior Mean (Log scale)") +
+    ggtitle("Variation in selection parameter with gene expression") + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  
+
+  param.table.sigma <- param.table %>%
+    filter((Parameter == "Sigma_X" | Parameter == "Sigma_Y")  & Model_Fit == "Protein_selection_strong") %>%
+    mutate(Parameter = ifelse(Parameter == "Sigma_X","Protein","mRNA"))
+  
+  sigma.p <- ggplot(param.table.sigma,aes(x=Data,y=Mean,color=Parameter)) +
+    geom_point(position=position_dodge(width=0.5)) +
+    geom_errorbar(aes(ymin=LB,ymax=UB),width=0,position=position_dodge(width=0.5)) +
+    theme_cowplot() +
+    xlab("Gene Expression Bin") +
+    ylab("Posterior Mean") +
+    ggtitle("Variation in drift parameter\nwith gene expression")  + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+  param.table.q <- param.table %>%
+    filter(Parameter == "Q" & Model_Fit == "Protein_selection_strong")
+  q.p <- ggplot(param.table.q,aes(x=Data,y=Mean)) +
+    geom_point() +
+    geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
+    theme_cowplot() +
+    xlab("Gene Expression Bin") +
+    ylab("Posterior Mean") +
+    ggtitle("Variation in slope parameter\nwith gene expression") + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  
+  p <- (selec.p | sigma.p | q.p) + 
+    plot_annotation(tag_level = "A") + 
+    plot_layout(guides = "collect")
+  return(p)
+
+}
+
+toplevel <- list.files(path="Results/Drop_human/Bin_based_on_paxdb_human_prot_abund//",pattern = "^[0-9]{1,2}-[0-9]{2,3}$",include.dirs = T)
+mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund//",toplevel),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+
+dic.table <- createDICTable(mcmc.rda)
+dic.table <- dic.table %>%
+  group_by(Data) %>%
+  mutate(Delta.DIC = DIC - min(DIC))
+dic.table
+
+prot.dom.param.table <- createParamTable(mcmc.rda) %>%
+  mutate(Bin.order = case_when(
+             Data == "0-10" ~ 1,
+             Data == "10-20" ~ 2,
+             Data == "20-30" ~ 3,
+             Data == "30-40" ~ 4,
+             Data == "40-50" ~ 5,
+             Data == "50-60" ~ 6,
+             Data == "60-70" ~ 7,
+             Data == "70-80" ~ 8,
+             Data == "80-90" ~ 9,
+             Data == "90-100" ~ 10
+           ))
+
+```
+
+```{r}
+param.table.selection <- prot.dom.param.table %>%
+    filter((Parameter == "H_X" | Parameter == "H_Y")  & Model_Fit == "Protein_selection_strong") %>%
+    mutate(Parameter = ifelse(Parameter == "H_X","Protein","mRNA"))
+
+
+selec.p <- ggplot(param.table.selection,aes(x=Data,y=Mean,color=Parameter)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0,position=position_dodge(width=0.5)) +
+  theme_cowplot() +
+  stat_cor(method="spearman",aes(x=Bin.order,y=Mean,label=..r.label..),show.legend = F) +
+  xlab("Gene Expression Bin") +
+  ylab("Rate of adaptation (Log scale)") +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+selec.p
+```
+
+```{r}
+param.table.tau <- prot.dom.param.table %>%
+  filter((Parameter == "Sigma_X" | Parameter == "Sigma_Y")  & Model_Fit == "Protein_selection_strong") %>%
+  mutate(Parameter = ifelse(Parameter == "Sigma_X","Protein","mRNA"))
+
+
+tau.p <- ggplot(param.table.tau,aes(x=Data,y=Mean,color=Parameter)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0,position=position_dodge(width=0.5)) +
+  stat_cor(method="spearman",aes(x=Bin.order,y=Mean,label=..r.label..),show.legend = F) +
+  theme_cowplot() +
+  xlab("Gene Expression Bin") +
+  ylab("Rate of drift (Log scale)") +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+```{r}
+
+param.table.q <- prot.dom.param.table %>%
+  filter(Parameter == "Q" & Model_Fit == "Protein_selection_strong")
+q.p <- ggplot(param.table.q,aes(x=Data,y=Mean)) +
+  geom_point(color=slope.color) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0,color=slope.color) +
+  stat_cor(method="spearman",aes(x=Bin.order,y=Mean,label=..r.label..),show.legend = F) +
+  theme_cowplot() +
+  xlab("Gene Expression Bin") +
+  ylab(expression("a"[R])) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+q.p
+```
+
+
+```{r fig.width=6,fig.height=2}
+gene.expr.effect <- (selec.p | tau.p | q.p) + 
+  plot_annotation(tag_level = "A") + 
+  plot_layout(guides = "collect")
+gene.expr.effect
+
+ggsave2("Figures/impact_of_expression_on_protein_dominant_model_parameters_mean_species.pdf",gene.expr.effect,width=15,height = 5)
+
+```
+
+
+
+```{r}
+hsapien.prot <- read_tsv("Data/PaxDB/paxdb_human_whole_organism_prot_abundance_integrated.tsv",comment="#") %>%
+  mutate(string_external_id = str_remove(string_external_id,"9606."))
+
+ensembl.prot.to.gene <- read_tsv("Data/PaxDB/hsapien_gene_mapping.tsv")
+
+hsapien.prot <- hsapien.prot %>%
+  left_join(ensembl.prot.to.gene,by=c("string_external_id"="ensembl_peptide_id"))
+
+ba.data <- read_tsv("Data/mean_se_rna_protein.tsv")
+ba.genes <- ba.data %>%
+  dplyr::select(Gene_ID) %>%
+  deframe() %>%
+  unique()
+
+hsapien.prot.filt <- hsapien.prot %>%
+  filter(ensembl_gene_id %in% ba.genes) %>% 
+  group_by(ensembl_gene_id) %>% 
+  summarize(abundance = sum(abundance))
+
+missing.ids <- ba.genes[which(!ba.genes %in% hsapien.prot.filt$ensembl_gene_id)]
+
+hsapien.prot.filt <- hsapien.prot.filt %>%
+  mutate(log10.abundance = log10(abundance),
+         Bin = Hmisc::cut2(log10.abundance,g = 10))
+
+eqtl <- read_tsv("Data/GTEx/eQTL_summary.tsv")
+
+eqtl.per.bin <- hsapien.prot.filt %>%
+  left_join(eqtl,by=c("ensembl_gene_id"="gene_id")) %>%
+  group_by(Bin) %>%
+  summarize(Mean.num.eQTL=mean(Num.eQTL,na.rm=T),
+            Mean.effect=mean(Mean.effect,na.rm=T),
+            Mean.abs.effect=mean(Mean.abs.effect,na.rm=T)) %>%
+  mutate(Bin = c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100"))
+
+number.enhancers <- read_csv("Data/Enhancer/human_keratinocyte_enhancer_counts_per_gene.csv")
+
+
+num.enhancers.per.bin <- hsapien.prot.filt %>%
+  left_join(number.enhancers,by=c("ensembl_gene_id"="Gene_ID")) %>%
+  group_by(Bin) %>%
+  summarize(Avg.Num.Enhancers=mean(Num.Enhancers,na.rm=T)) %>%
+  mutate(Bin = c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100"))
+
+pqtl <- read_csv("Data/pQTL/chick_etal_2016_corrected_pQTL.csv")
+
+mouse.id <- pqtl$`Gene Identifier (Ensembl)`
+
+mart1 <- useMart("ensembl", dataset="hsapiens_gene_ensembl",host = "dec2021.archive.ensembl.org")
+mart2 <- useMart("ensembl", dataset="mmusculus_gene_ensembl",host = "dec2021.archive.ensembl.org") 
+
+# human / mouse
+mouse.to.human <- getLDS(attributes=c("ensembl_gene_id"),
+       filters="ensembl_gene_id", values=mouse.id, mart=mart2,
+       attributesL=c("ensembl_gene_id"), martL=mart1)
+mouse.to.human.one.to.one <- mouse.to.human %>%
+  dplyr::rename(Mouse = Gene.stable.ID,Human = Gene.stable.ID.1) %>%
+  distinct(Mouse, .keep_all = TRUE) %>%
+  distinct(Human, .keep_all = TRUE)
+  
+pqtl <- pqtl %>%
+  inner_join(mouse.to.human.one.to.one,by=c("Gene Identifier (Ensembl)" = "Mouse"))
+
+
+pqtl.per.bin <- hsapien.prot.filt %>%
+  left_join(pqtl,by=c("ensembl_gene_id"="Human")) %>%
+  group_by(Bin,`pQTL Type`) %>%
+  summarize(Median.Var = median(`Percent Variance accounted for by pQTL`,na.rm=T),
+    Mean.LOD = mean(`Updated LOD score (MainScan after sample ID correction)`,na.rm=T),
+    Mean.LOD.Condition = mean(`Conditioned LOD score (pQTL conditioned on transcript abundance)`,na.rm=T)) %>%
+  filter(!is.na(Mean.LOD))
+
+pqtl.per.bin$Bin <- c(rep("0-10",2),
+                 rep("10-20",2),
+                 rep("20-30",2),
+                 rep("30-40",2),
+                 rep("40-50",2),
+                 rep("50-60",2),
+                 rep("60-70",2),
+                 rep("70-80",2),
+                 rep("80-90",2),
+                 rep("90-100",2)
+  )
+
+
+
+number.enhancers.mouse <- read_csv("Data/Enhancer/mouse_kidney_enhancer_counts_per_gene_w_human_id.csv")
+
+
+num.enhancers.per.bin.mouse <- hsapien.prot.filt %>%
+  left_join(number.enhancers.mouse,by=c("ensembl_gene_id"="Human")) %>%
+  group_by(Bin) %>%
+  summarize(Avg.Num.Enhancers.Mouse=mean(Num.Enhancers,na.rm=T)) %>%
+  mutate(Bin = c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100"))
+
+number.enhancers.fly <- read_csv("Data/Enhancer/fly_bg3c2_enhancer_counts_per_gene_w_human_id.csv")
+
+
+num.enhancers.per.bin.fly <- hsapien.prot.filt %>%
+  left_join(number.enhancers.fly,by=c("ensembl_gene_id"="Human")) %>%
+  group_by(Bin) %>%
+  summarize(Avg.Num.Enhancers.Fly=mean(Num.Enhancers,na.rm=T)) %>%
+  mutate(Bin = c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100"))
+
+
+
+param.table.w.enh.eqtl <- prot.dom.param.table %>%
+    filter((Parameter %in% c("H_Y","H_X","Q","Sigma_Y","Sigma_X"))  & Model_Fit == "Protein_selection_strong") %>%
+    mutate(Abundance = case_when(
+      Parameter %in% c("H_X","Sigma_X") ~ "Protein",
+      Parameter %in% c("H_Y","Sigma_Y") ~ "mRNA",
+      TRUE ~ "Slope"
+    ),
+    Parameter.type = case_when(
+      Parameter %in% c("H_X","H_Y") ~ "Selection",
+      Parameter %in% c("Sigma_X","Sigma_Y") ~ "Drift",
+      TRUE ~ "Slope"
+    ))
+
+param.table.w.enh.eqtl <- param.table.w.enh.eqtl  %>%
+  left_join(eqtl.per.bin,by = c("Data" = "Bin")) %>%
+  left_join(pqtl.per.bin,by=c("Data" = "Bin")) %>%
+  left_join(num.enhancers.per.bin, by=c("Data" = "Bin")) %>%
+  left_join(num.enhancers.per.bin.mouse,by=c("Data" = "Bin")) %>%
+  left_join(num.enhancers.per.bin.fly,by=c("Data" = "Bin"))
+```
+
+```{r}
+tau.w.enh.eqtl <- param.table.w.enh.eqtl %>%
+  filter(Parameter.type == "Drift") %>%
+  group_by(Data) %>%
+  mutate(Sigma.Diff = Mean - Mean[Abundance == "Protein"]) %>%
+  filter(Abundance == "mRNA")
+
+tau.diff.vs.enh <- ggplot(tau.w.enh.eqtl,aes(x=Avg.Num.Enhancers,y=Sigma.Diff)) +
+  geom_point() +
+  xlab("Mean number of enhancers per gene") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  ylab(expression("Log("*tau[R]*") - Log("*tau[P]*")")) +
+  theme_cowplot()
+tau.diff.vs.enh
+```
+
+
+### Essential vs. non-essential
+
+```{r}
+toplevel <- list.files(path="Results/Drop_human/Essential_vs_non_essential/",pattern = "[A-Za-z_]+",include.dirs = T)
+mcmc.rda <- list.files(path=file.path("Results/Drop_human/Essential_vs_non_essential",toplevel),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+
+ess.param.table <- createParamTable(mcmc.rda,pattern="(Essential|Non_essential)/[A-Za-z_]+")
+ess.dic <- createDICTable(mcmc.rda,pattern="(Essential|Non_essential)/[A-Za-z_]+")
+
+ess.dic <- ess.dic %>%
+  group_by(Data) %>%
+  mutate(Delta.DIC = DIC - min(DIC))
+ess.dic
+```
+
+
+```{r fig.width=5,fig.height=5}
+param.table.ess<- ess.param.table %>%
+    filter((Data == "Essential" & Model_Fit == "Protein_selection_strong")|(Data == "Non_essential" & Model_Fit == "Protein_selection_strong")) %>%
+    filter((Parameter == "H_X" | Parameter == "H_Y")) %>%
+    mutate(Parameter = ifelse(Parameter == "H_X","Protein","mRNA"),
+           Data = ifelse(Data == "Non_essential","Non-essential","Essential")) %>%
+   dplyr::rename(Abundance = Parameter)
+
+ess.p <- ggplot(param.table.ess,aes(x=Data,y=Mean,color=Abundance)) +
+    geom_point(position=position_dodge(width=0.5)) +
+    geom_errorbar(aes(ymin=LB,ymax=UB),width=0,position=position_dodge(width=0.5)) +
+    theme_cowplot() +
+    xlab("") +
+    labs(color="Expression type") +
+    ylab("Rate of adaptation (Log scale)") +
+    scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color))
+ess.p
+
+```
+
+```{r}
+load("Results/Drop_human/Essential_vs_non_essential/Essential/Protein_selection_strong/2024-06-13_prot_determines_mrna_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+ess.fit <- fit
+
+load("Results/Drop_human/Essential_vs_non_essential/Non_essential/Protein_selection_strong/2024-06-13_prot_determines_mrna_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+non.ess.fit <- fit
+
+ess.trace <- exp(ess.fit$Posterior2[,c("H_Y","H_X")])
+non.ess.trace <- exp(non.ess.fit$Posterior2[,c("H_Y","H_X")])
+  
+mean.ess <- apply(ess.trace,MARGIN = 2,FUN = mean)
+mean.non.ess <- apply(non.ess.trace,MARGIN = 2,FUN = mean)
+ci.ess <- p.interval(ess.trace)
+ci.non.ess  <- p.interval(non.ess.trace)
+
+```
+
+
+
+```{r}
+sel.vs.gene.exp.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Data,y=Mean,color=Abundance)) +
+    geom_point(position=position_dodge(width=0.5)) +
+    geom_errorbar(aes(ymin=LB,ymax=UB),width=0,position=position_dodge(width=0.5)) +
+    stat_cor(method="spearman",aes(x=Bin.order,y=Mean,label=..r.label..),show.legend = F) +
+    theme_cowplot() +
+    stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+    xlab("Gene Expression Bin") +
+    ylab("Rate of adaptation (Log scale)") +
+    labs(color="Expression type") +
+    scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+sel.vs.gene.exp.p
+
+
+
+sel.vs.eqtl <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Mean.abs.effect,y=Mean,color=Abundance)) +
+  geom_point() +
+  xlab("Mean magintude of eQTL effect") +
+  ylab("Rate of adaptation (Log scale)") +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot() +
+  labs(color="Expression type") +
+  facet_wrap(~Abundance)
+
+
+sel.vs.eqtl
+
+
+sel.vs.pqtl <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Mean.LOD.Condition,y=Mean,color=Abundance)) +
+  geom_point() +
+  xlab("Mean pQTL LOD") +
+  ylab("Rate of adaptation (Log scale)") +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot() +
+  theme(aspect.ratio = 1) +
+  labs(color="Expression type") +
+  facet_wrap(~Abundance + `pQTL Type`,scales="free")
+sel.vs.pqtl
+
+
+sel.vs.enh <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Avg.Num.Enhancers,y=Mean,color=Abundance)) +
+  geom_point() +
+  xlab("Mean number of enhancers per gene") +
+  ylab("Rate of adaptation (Log scale)") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot() + 
+  labs(color="Expression type") +
+  facet_wrap(~Abundance)
+
+sel.vs.enh
+
+
+```
+
+
+
+```{r ig.width=8,fig.height=8}
+
+layout <- "
+AAAA
+BBCC
+DDEE
+FGGH
+"
+
+total <- (sel.vs.gene.exp.p + sel.vs.enh + tau.diff.vs.enh + sel.vs.eqtl + ess.p +  plot_spacer() + guide_area() + plot_spacer()) + plot_layout(guides = "collect",widths=c(1,1),design = layout) + plot_annotation(tag_levels = "A") 
+
+ggsave2("Figures/Figure_4.pdf",plot=total,width=10,height=15)
+
+```
+
+
+
+```{r fig.height=4,fig.width=5}
+tau.w.enh.eqtl <- param.table.w.enh.eqtl %>%
+  filter(Parameter.type == "Drift") %>%
+  group_by(Data) %>%
+  mutate(Sigma.Diff = Mean - Mean[Abundance == "Protein"]) %>%
+  filter(Abundance == "mRNA")
+
+tau.diff.vs.enh.mouse <- ggplot(tau.w.enh.eqtl,aes(x=Avg.Num.Enhancers.Mouse,y=Sigma.Diff)) +
+  geom_point() +
+  xlab("Mean number of enhancers per gene") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  ylab(expression("Log("*tau[R]*") - Log("*tau[P]*")")) +
+  theme_cowplot() 
+
+tau.diff.vs.enh.fly <- ggplot(tau.w.enh.eqtl,aes(x=Avg.Num.Enhancers.Fly,y=Sigma.Diff)) +
+  geom_point() +
+  xlab("Mean number of enhancers per gene") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  ylab(expression("Log("*tau[R]*") - Log("*tau[P]*")")) +
+  theme_cowplot() 
+
+
+
+sel.vs.enh.mouse <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Avg.Num.Enhancers.Mouse,y=Mean,color=Abundance)) +
+  geom_point() +
+  xlab("Mean number of enhancers per gene") +
+  ylab("Rate of adaptation (Log scale)") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot() + 
+  labs(color="Expression type") +
+  facet_wrap(~Abundance) +
+  ggtitle("Mouse")
+
+sel.vs.enh.fly <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Avg.Num.Enhancers.Fly,y=Mean,color=Abundance)) +
+  geom_point() +
+  xlab("Mean number of enhancers per gene") +
+  ylab("Rate of adaptation (Log scale)") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot() + 
+  labs(color="Expression type") +
+  facet_wrap(~Abundance) +
+  ggtitle("Fly")
+
+
+mouse.fly.enh <- (sel.vs.enh.mouse + tau.diff.vs.enh.mouse + sel.vs.enh.fly + tau.diff.vs.enh.fly) + plot_layout(guides="collect",nrow=2)
+
+ggsave2("Figures/mouse_fly_enhancer.pdf",mouse.fly.enh,width = 10,height=9)
 
 ```
