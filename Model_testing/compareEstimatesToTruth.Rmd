@@ -1,0 +1,402 @@
+---
+title: "Evaluating MCMC"
+author: "Alex Cope"
+date: '2023-05-30'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(PCMBase,lib.loc = "~/R_dev")
+library(PCMBaseCpp)
+library(LaplacesDemon,lib.loc = "~/R_dev/")
+require(coda)
+library(tidyverse)
+library(cowplot)
+library(ggpubr)
+library(phytools)
+library(extraDistr)
+
+getPosteriorTable <- function(model.fit.directory,file.name="adaptive_mcmc.Rda")
+{
+  if (file.exists(file.path(model.fit.directory,file.name)))
+  {
+    load(file.path(model.fit.directory,file.name))
+    df <- adapt.fit$Summary1 %>% 
+        as.data.frame() %>%
+        rownames_to_column("Parameter")
+      write_tsv(df,file.path(model.fit.directory,"posterior_means.tsv"))
+  }
+}
+
+getDIC <- function(model.fit)
+{
+  load(model.fit)
+  if (!is.na(fit$DIC2[3]))
+  {
+    df <- data.frame(Mean.LL = mean(fit$Monitor[,"LL"]),Mean.Dev = fit$DIC2[1],Eff.Param=fit$DIC2[2],DIC=fit$DIC2[3],Stationary="Yes")
+  } else{
+    df <- data.frame(Mean.LL = mean(fit$Monitor[,"LL"]),Mean.Dev = fit$DIC1[1],Eff.Param=fit$DIC1[2],DIC=fit$DIC1[3],Stationary="No")
+  }
+  return(df)
+}
+
+getAdaptDIC <- function(model.fit)
+{
+  load(model.fit)
+  if (!is.na(adapt.fit$DIC2[3]))
+  {
+    df <- data.frame(Mean.LL = mean(adapt.fit$Monitor[,"LL"]),Mean.Dev = adapt.fit$DIC2[1],Eff.Param=adapt.fit$DIC2[2],DIC=adapt.fit$DIC2[3],Stationary="Yes")
+  } else{
+    df <- data.frame(Mean.LL = mean(adapt.fit$Monitor[,"LL"]),Mean.Dev = adapt.fit$DIC1[1],Eff.Param=adapt.fit$DIC1[2],DIC=adapt.fit$DIC1[3],Stationary="No")
+  }
+  return(df)
+}
+
+
+```
+
+
+# Simulate data with $H$, $Sigma$ the same across all genes -- 11 species
+
+```{r}
+truth <- read_tsv("Simulated_data/true_parameters_used_for_parameters_same_sim_100_loci.tsv")
+truth[,"H_Y"] <- log(truth[,"H_Y"])
+truth[,"H_X"] <- log(truth[,"H_X"])
+truth[,"Sigma_Y"] <- log(truth[,"Sigma_Y"])
+truth[,"Sigma_X"] <- log(truth[,"Sigma_X"])
+
+truth <- truth %>%
+  mutate(Simulation=paste0("Simulated_data_",1:nrow(truth))) %>%
+  pivot_longer(-Simulation,names_to="Parameter",values_to="Truth")
+  
+```
+
+
+```{r}
+directory <- "Results/Test_DIC/Truth_C_eq_0/100_loci/C_eq_0_fit/"
+true.models <- list.files(directory,pattern="Simulated_data_[0-9]+",full.names = T)
+lapply(true.models,getPosteriorTable)
+
+```
+
+
+```{r}
+directory <- "Results/Test_DIC/Truth_C_eq_0/100_loci/C_eq_0_fit/"
+model.fits <- list.files(directory,pattern="posterior_means.tsv", recursive = T)
+names(model.fits) <- str_match(model.fits,"Simulated_data_[0-9]{0,2}")
+
+post.mean.df <- lapply(model.fits,function(x)
+  {
+    read_tsv(file.path(directory,x),col_types =cols()) 
+}
+)%>% bind_rows(.id="Simulation")
+
+post.mean.df <- post.mean.df %>%
+  left_join(truth,by=c("Simulation","Parameter"))
+```
+
+
+```{r fig.width=7,fig.height=7}
+post.mean.df.shared <- post.mean.df %>%
+  filter(Parameter %in% c("H_Y","H_X","Q","Sigma_Y","Sigma_X"))
+post.mean.df.shared <- post.mean.df.shared %>%
+  mutate(Parameter = case_when(
+    Parameter == "H_X" ~ "Alpha_X",
+    Parameter == "H_Y" ~ "Alpha_Y",
+    Parameter == "Q" ~ "b_1",
+    T ~ Parameter
+  ))
+
+p <- ggplot(post.mean.df.shared,aes(x=Truth,y=Mean)) +
+  geom_point() +
+  stat_cor(method="spearman",label.sep="\n") +
+  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  theme_cowplot()+
+  ylab("Posterior Mean Estimate") +
+  geom_abline(intercept=0,slope=1,linetype="dashed") +
+  theme(aspect.ratio=1,axis.title = element_text(size=24)) +
+  facet_wrap(~Parameter,scales="free")
+p
+
+ggsave2("simulation_results_11_species_100_loci.pdf",p,width=8,height=8)
+
+```
+
+
+# Model comparisons
+
+```{r}
+
+getDIC <- function(model.fit)
+{
+  load(model.fit)
+  if (!is.na(fit$DIC2[3]))
+  {
+    df <- data.frame(Mean.Dev = fit$DIC2[1],Eff.Param=fit$DIC2[2],DIC=fit$DIC2[3],Stationary="Yes")
+  } else{
+    df <- data.frame(Mean.Dev = fit$DIC1[1],Eff.Param=fit$DIC1[2],DIC=fit$DIC1[3],Stationary="No")
+    #df <- data.frame(Mean.Dev = NA,Eff.Param=NA,DIC=NA)
+  }
+  return(df)
+}
+
+getAdaptDIC <- function(model.fit)
+{
+  load(model.fit)
+  if (!is.na(adapt.fit$DIC2[3]))
+  {
+    df <- data.frame(Mean.Dev = adapt.fit$DIC2[1],Eff.Param=adapt.fit$DIC2[2],DIC=adapt.fit$DIC2[3],Stationary="Yes")
+  } else{
+    df <- data.frame(Mean.Dev = adapt.fit$DIC1[1],Eff.Param=adapt.fit$DIC1[2],DIC=adapt.fit$DIC1[3],Stationary="No")
+    #df <- data.frame(Mean.Dev = NA,Eff.Param=NA,DIC=NA)
+  }
+  return(df)
+}
+
+true.models <- list.files("Results/Test_DIC/Truth_C_eq_0/100_loci/C_eq_0_fit/",pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+wrong.models <- list.files("Results/Test_DIC/Truth_C_eq_0/100_loci/C_neq_0_reverse_trait_fit/",pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+
+true.data.set <- str_extract(true.models,"Simulated_data_[0-9]+")
+wrong.data.set <- str_extract(wrong.models,"Simulated_data_[0-9]+")
+
+names(true.models) <- true.data.set
+names(wrong.models) <- wrong.data.set
+
+dic.truth <- lapply(true.models,getDIC) %>% bind_rows(.id="Data")
+dic.wrong <- lapply(wrong.models,getDIC) %>% bind_rows(.id="Data")
+
+dic.df <- dic.truth %>%
+  inner_join(dic.wrong,by="Data",suffix=c("_True","_Wrong")) %>%
+  mutate(Delta.DIC=DIC_Wrong - DIC_True)
+
+```
+
+```{r fig.width=5}
+
+dic.hist <- ggplot(dic.df,aes(x=Delta.DIC)) +
+  geom_bar() +
+  scale_x_binned() +
+  theme_cowplot() +
+  xlab(expression(Delta*"DIC")) +
+  ylab("Count") +
+  ggtitle("Simulations suggest ability to distinguish which\ntrait drives the other")
+dic.hist
+
+dic.df.stationary <- dic.df %>%
+  filter(Stationary_True == "Yes" & Stationary_Wrong == "Yes")
+
+dic.hist.stat <- ggplot(dic.df.stationary,aes(x=Delta.DIC)) +
+  geom_bar() +
+  scale_x_binned() +
+  xlab(expression(Delta*"DIC")) +
+  theme_cowplot()
+dic.hist.stat
+
+
+dic.cutoff <- c(0,2,5,10,50)
+names(dic.cutoff) <- dic.cutoff
+delta.dic.score <- purrr::map_df(dic.cutoff,function(cutoff)
+  {
+   return((dic.df.stationary %>% filter(Delta.DIC > cutoff) %>% nrow()) / nrow(dic.df.stationary)) 
+}) %>% pivot_longer(everything(),names_to="Cutoff",values_to="Fraction_correct") %>%
+  mutate(Cutoff = as.numeric(Cutoff))
+
+dic.acc <- ggplot(delta.dic.score,aes(x=Cutoff,y=Fraction_correct)) +
+  geom_point() +
+  theme_cowplot() +
+  xlab(expression(Delta*"DIC cutoff")) +
+  ylab("Fraction of simulations correct model selected")
+dic.acc
+
+dic.perf <- (dic.hist.stat | dic.acc) + plot_annotation(tag_levels="A")
+
+ggsave2("../Figures/dic_performance.pdf",dic.perf,width=11,height=5)
+
+
+```
+
+
+
+
+## Parameters differ across genes 
+
+### 100 genes w/ c fit 
+```{r}
+true.models <- list.files("Results/Truth_C_neq_0/C_neq_0_fit/",pattern="Simulated_data_[0-9]+",full.names = T)
+lapply(true.models,getPosteriorTable)
+```
+
+
+```{r fig.width=7,fig.height=7}
+
+truth <- read_tsv("Simulated_data/true_parameters_used_for_parameters_diff_w_c_100_loci.tsv")
+truth[,"H_Y"] <- truth[,"H_Y_Mean"]
+truth[,"H_X"] <- truth[,"H_X_Mean"]
+truth[,"Q"] <- truth[,"Q_Mean"]
+truth[,"C"] <- truth[,"C_Mean"]
+truth[,"Sigma_Y"] <- truth[,"Sigma_Y_Mean"]
+truth[,"Sigma_X"] <- truth[,"Sigma_X_Mean"]
+
+truth <- truth %>%
+  mutate(Simulation=paste0("Simulated_data_",1:nrow(truth))) %>%
+  pivot_longer(-Simulation,names_to="Parameter",values_to="Truth")
+  
+directory <- "Results/Truth_C_neq_0/100_loci/C_neq_0_fit/"
+model.fits <- list.files(directory,pattern="posterior_means.tsv", recursive = T)
+names(model.fits) <- str_match(model.fits,"Simulated_data_[0-9]+")
+
+post.mean.df <- lapply(model.fits,function(x)
+  {
+    read_tsv(file.path(directory,x),col_types =cols()) 
+}
+)%>% bind_rows(.id="Simulation")
+
+post.mean.df <- post.mean.df %>%
+  left_join(truth,by=c("Simulation","Parameter"))
+
+post.mean.df.diff <- post.mean.df %>%
+  filter(Parameter %in% c("H_Y","H_X","Q","C","Sigma_Y","Sigma_X"))
+post.mean.df.diff <- post.mean.df.diff%>%
+  mutate(Parameter = case_when(
+    Parameter == "H_X" ~ "F_X",
+    Parameter == "H_Y" ~ "F_Y",
+    T ~ Parameter
+  ))
+
+p <- ggplot(post.mean.df.diff,aes(x=Truth,y=Mean)) +
+  geom_point() +
+  stat_cor(method="spearman",label.sep="\n") +
+  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  theme_cowplot()+
+  geom_abline(intercept=0,slope=1,linetype="dashed") +
+  theme(aspect.ratio=1) +
+  facet_wrap(~Parameter,scales="free")
+p
+
+```
+### 100 genes w/o c fit 
+
+```{r}
+true.models <- list.files("Results/Truth_C_eq_0/C_eq_0_fit/",pattern="Simulated_data_[0-9]+",full.names = T)
+lapply(true.models,getPosteriorTable)
+```
+
+
+```{r fig.width=7,fig.height=7}
+
+truth <- read_tsv("Simulated_data/true_parameters_used_for_parameters_diff_100_loci.tsv")
+truth[,"H_Y"] <- truth[,"H_Y_Mean"]
+truth[,"H_X"] <- truth[,"H_X_Mean"]
+truth[,"Q"] <- truth[,"Q_Mean"]
+truth[,"Sigma_Y"] <- truth[,"Sigma_Y_Mean"]
+truth[,"Sigma_X"] <- truth[,"Sigma_X_Mean"]
+
+truth <- truth %>%
+  mutate(Simulation=paste0("Simulated_data_",1:nrow(truth))) %>%
+  pivot_longer(-Simulation,names_to="Parameter",values_to="Truth")
+  
+directory <- "Results/Truth_C_eq_0/C_eq_0_fit/"
+model.fits <- list.files(directory,pattern="posterior_means.tsv", recursive = T)
+names(model.fits) <- str_match(model.fits,"Simulated_data_[0-9]+")
+
+post.mean.df <- lapply(model.fits,function(x)
+  {
+    read_tsv(file.path(directory,x),col_types =cols()) 
+}
+)%>% bind_rows(.id="Simulation")
+
+post.mean.df <- post.mean.df %>%
+  left_join(truth,by=c("Simulation","Parameter"))
+
+post.mean.df.diff <- post.mean.df %>%
+  filter(Parameter %in% c("H_Y","H_X","Q","C","Sigma_Y","Sigma_X"))
+post.mean.df.diff <- post.mean.df.diff%>%
+  mutate(Parameter = case_when(
+    Parameter == "H_X" ~ "F_X",
+    Parameter == "H_Y" ~ "F_Y",
+    T ~ Parameter
+  ))
+
+p <- ggplot(post.mean.df.diff,aes(x=Truth,y=Mean)) +
+  geom_point() +
+  stat_cor(method="spearman",label.sep="\n") +
+  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  theme_cowplot()+
+  geom_abline(intercept=0,slope=1,linetype="dashed") +
+  theme(aspect.ratio=1) +
+  facet_wrap(~Parameter,scales="free")
+p
+
+```
+
+### Model fits w/c fits
+
+```{r}
+true.models <- list.files("Results/Truth_C_neq_0/C_neq_0_fit/",pattern="Simulated_data_[0-9]+",full.names = T)
+lapply(true.models,getPosteriorTable)
+```
+Models were simulated with a randomly chosen value of $c$. We then fit models with and without the $c$ parameter.
+
+
+```{r fig.width=7,fig.height=7}
+
+truth <- read_tsv("Simulated_data/true_parameters_used_for_parameters_diff_w_c_100_loci.tsv")
+truth[,"H_Y"] <- truth[,"H_Y_Mean"]
+truth[,"H_X"] <- truth[,"H_X_Mean"]
+truth[,"Q"] <- truth[,"Q_Mean"]
+truth[,"C"] <- truth[,"C_Mean"]
+truth[,"Sigma_Y"] <- truth[,"Sigma_Y_Mean"]
+truth[,"Sigma_X"] <- truth[,"Sigma_X_Mean"]
+
+truth <- truth %>%
+  mutate(Simulation=paste0("Simulated_data_",1:nrow(truth))) %>%
+  pivot_longer(-Simulation,names_to="Parameter",values_to="Truth")
+  
+directory <- "Results/Truth_C_neq_0/100_loci/C_neq_0_fit/"
+model.fits <- list.files(directory,pattern="posterior_means.tsv", recursive = T)
+names(model.fits) <- str_match(model.fits,"Simulated_data_[0-9]+")
+
+post.mean.df <- lapply(model.fits,function(x)
+  {
+    read_tsv(file.path(directory,x),col_types =cols()) 
+}
+)%>% bind_rows(.id="Simulation")
+
+post.mean.df <- post.mean.df %>%
+  left_join(truth,by=c("Simulation","Parameter"))
+
+post.mean.df.diff <- post.mean.df %>%
+  filter(Parameter %in% c("H_Y","H_X","Q","C","Sigma_Y","Sigma_X"))
+post.mean.df.diff <- post.mean.df.diff%>%
+  mutate(Parameter = case_when(
+    Parameter == "H_X" ~ "alpha",
+    Parameter == "H_Y" ~ "beta",
+    Parameter == "Sigma_Y" ~ "tau[P]",
+    Parameter == "Sigma_X" ~ "tau[R]",
+    Parameter == "Q" ~ "a[P]",
+    Parameter == "C" ~ "c",
+    T ~ Parameter
+  ))
+
+p <- ggplot(post.mean.df.diff,aes(x=Truth,y=Mean)) +
+  geom_point() +
+  stat_cor(method="spearman",label.sep="\n") +
+  theme_cowplot()+
+  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  geom_abline(intercept=0,slope=1,linetype="dashed") +
+  theme(aspect.ratio=1) +
+  ylab("Posterior Mean") +
+  facet_wrap(~Parameter,scales="free",labeller = "label_parsed")
+p
+
+
+```
+
+
+
+
+
+
+
