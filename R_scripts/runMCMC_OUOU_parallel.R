@@ -5,7 +5,7 @@ library(tidyverse)
 library(phytools)
 library(argparse)
 library(parallel)
-source("/data2/cope/Active_projects/Cope_Schraiber_Pennell/rna-protein-coevolution/R_notebooks/local_functions.R")
+source("/data2/cope/Active_projects/Cope_Schraiber_Pennell/rna-protein-coevolution/R_scripts/local_functions.R")
 
 
 parser <- ArgumentParser()
