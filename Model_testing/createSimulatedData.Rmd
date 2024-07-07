@@ -1,0 +1,522 @@
+---
+title: "Generate Simulated Data"
+author: "Alex Cope"
+date: '2023-05-24'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(PCMBase,lib.loc = "~/R_dev")
+library(PCMBaseCpp)
+library(tidyverse)
+
+
+ba.tree <- ape::read.nexus("../Data/tree_11sp_noGpig.nex")
+ba.tree <- phytools::force.ultrametric(ba.tree,method = "extend") # tree is not ultrametric due to apparent rounding error
+# tip.heights <- ips::tipHeights(ba.tree)
+# ba.tree <- pbtree(n = 50,scale = unname(tip.heights[1]))
+# write.tree(ba.tree,"Simulated_data/Parameters_diff_same_prior_50_species/simulated_tree.nwk")
+```
+
+# Create OUOU model parameterization
+
+```{r}
+listParameterizationsOU <- PCMListParameterizations(structure(0.0, class="OU"))
+listParameterizationsOU$X0 <- listParameterizationsOU$X0[1]
+listParameterizationsOU$H <- listParameterizationsOU$H[12]
+listParameterizationsOU$Sigma_x <- listParameterizationsOU$Sigma_x[2]
+listParameterizationsOU$Sigmae_x <- listParameterizationsOU$Sigmae_x[c(5,7)]
+
+dtParameterizations <- PCMTableParameterizations(
+  structure(0.0, class="OU"), listParameterizations = listParameterizationsOU)
+
+PCMGenerateParameterizations(structure(0.0, class="OU"), 
+                             tableParameterizations = dtParameterizations[])
+
+```
+
+
+# Simulate datasets assuming parameters are truly shared across genes
+Assume two traits $X$ and $Y$ where both traits are evolving under the an OU process.
+The optimum of trait $Y$ at time $t$ $\theta(t)$ is a function of $X(t)$, i.e. $\theta(t) = \psi_Y + bX(t)$, where $\psi_Y$ is the optimum of $Y$ independent of the effects of $X$.
+The optimum of $X$ will be denoted as $\psi_X$.
+Assumes $\vec{\psi}$ is constant across the given tree.
+
+The OU processes are assumed to be at stationarity, i.e. the root value of each trait $X(0)$ and $Y(0)$ is assumed to be the optimum for each trait.
+This means $X(0) = \psi_X$ and $Y(0) = \psi_Y + bX(0) = \psi_Y + b\psi_X$.
+This is based on equation D.1 from Bartoszeck et al. 2012.
+Note that these derivation were based on the mvSlouch framework in which $X$ evolved according to a BM process.
+Do we need to do something different?
+
+
+
+```{r}
+set.seed(100) # for reproducibility
+num.sim <- 100
+num.loci <- 100 # number of loci
+
+parameter.matrix <- matrix(rep(0,num.sim*(num.loci*2+5)),nrow=num.sim,ncol = 2*num.loci + 5)
+model.type <- "OU__Global_X0__Global_H__Theta__Diagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
+
+
+ba.tree <- ape::read.nexus("../Data/tree_11sp_noGpig.nex")
+ba.tree <- phytools::force.ultrametric(ba.tree,method = "extend") # tree is not ultrametric due to 
+tip.height <- ips::tipHeights(ba.tree)[1]
+
+
+sigma.x.mean <- -2.5
+sigma.y.mean <- -2.5
+alpha.x.mean <- log(log(2)/(tip.height/4))
+alpha.y.mean <- log(log(2)/(tip.height/4))
+b.mean <- 0.75
+
+for (i in 1:num.sim)
+{
+  # Simulate the optima of the 2 traits across loci
+  psi.x <- rnorm(n=num.loci,mean=0,sd=1)
+  psi.y <- rnorm(n=num.loci,mean=0,sd=1)
+  sigma.x <- rlnorm(n=1,meanlog = sigma.x.mean,sdlog = 1.5)
+  sigma.y <- rlnorm(n=1,meanlog = sigma.y.mean,sdlog = 1.5)
+  alpha.x <- rlnorm(n=1,meanlog = alpha.x.mean,sdlog = 1.5)
+  alpha.y <- rlnorm(n=1,meanlog = alpha.y.mean,sdlog = 1.5)
+  b <- rnorm(n=1,b.mean,0.25)
+  
+  ## Get root state
+  x0 <- psi.x 
+  y0 <- psi.y + b*x0
+
+  data.pcm <- vector(mode="list",length=num.loci)
+  true.param <- c(alpha.y,alpha.x,b,sigma.y,sigma.x)
+  names(true.param) <- c("H_Y","H_X","Q","Sigma_Y","Sigma_X")
+  for(j in 1:num.loci)
+  {
+    true.model <- PCM(model=model.type,k=2)
+    param <- c(y0[j],
+                    x0[j],
+                    alpha.y,
+                    0,
+                    -b*alpha.y,
+                    alpha.x,
+                    y0[j],
+                    x0[j],
+                    sigma.y,
+                    sigma.x)
+    PCMParamLoadOrStore(true.model, param, offset=0, load=T)
+    
+    psi.param <- c(psi.y[j],psi.x[j])
+    names(psi.param) <- paste0(c("Psi_Y_","Psi_X_"),j)
+    true.param <- c(true.param,psi.param)
+    data.pcm[[j]] <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+  
+  }
+  parameter.matrix[i,] <- true.param
+  names(data.pcm) <- paste0("Gene_",rep(1:num.loci))
+  data.df <- purrr::map(data.pcm,~.x %>% 
+                          t() %>% 
+                          as.data.frame() %>% 
+                          rownames_to_column("Species")) %>% 
+                        bind_rows(.id="Locus") %>%
+             filter(Species %in% ba.tree$tip.label)
+  write_tsv(data.df, file.path("Simulated_data/Parameters_same_100_loci/",paste0("simulated_data_",i)))
+}
+
+colnames(parameter.matrix) <-c("H_Y","H_X","Q","Sigma_Y","Sigma_X",paste0(c("Psi_X_","Psi_Y_"),rep(1:num.loci,each=2)))
+
+
+write_tsv(as.data.frame(parameter.matrix),"Simulated_data/true_parameters_used_for_parameters_same_sim_100_loci.tsv")
+```
+
+
+
+
+# Simulate datasets assuming parameters are different across genes
+
+
+## Without C
+
+### 50 genes
+```{r}
+set.seed(50) # for reproducibility
+num.sim <- 100
+num.loci <- 50 # number of loci
+
+ba.tree <- ape::read.nexus("../Data/tree_11sp_noGpig.nex")
+ba.tree <- phytools::force.ultrametric(ba.tree,method = "extend") # tree is not ultrametric due to 
+tip.height <- ips::tipHeights(ba.tree)[1]
+min.edge <- min(ba.tree$edge.length)
+parameter.matrix <- matrix(rep(0,num.sim*(num.loci*7+10)),nrow=num.sim,ncol = 7*num.loci + 10)
+model.type <- "OU__Global_X0__Global_H__Theta__Diagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
+
+for (i in 1:num.sim)
+{
+  # Simulate the optima of the 2 traits across loci
+  psi.x <- rnorm(n=num.loci,mean=0,sd=1)
+  psi.y <- rnorm(n=num.loci,mean=0,sd=1)
+  
+  sigma.x.mean <- runif(n=1,min=-3,max=-2)
+  sigma.y.mean <- runif(n=1,min=-3,max=-2)
+  alpha.x.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  alpha.y.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  b.mean <- runif(n=1,min=0,max=1)
+  
+  data.pcm <- vector(mode="list",length=num.loci)
+  true.param <- c(alpha.y.mean,log(0.5),alpha.x.mean,log(0.5),b.mean,log(0.25),sigma.y.mean,log(0.5),sigma.x.mean,log(0.5))
+  names(true.param) <- c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std")
+  for(j in 1:num.loci)
+  {
+    sigma.x <- rlnorm(n=1,meanlog = sigma.x.mean,sdlog = 0.5)
+    sigma.y <- rlnorm(n=1,meanlog = sigma.y.mean,sdlog = 0.5)
+    alpha.x <- rlnorm(n=1,meanlog = alpha.x.mean,sdlog = 0.5)
+    alpha.y <- rlnorm(n=1,meanlog = alpha.y.mean,sdlog = 0.5)
+    b <- rnorm(n=1,mean=b.mean,sd=0.25)
+    ## Get root state
+    x0 <- psi.x[j]
+    y0 <- psi.y[j] + b*x0
+    true.model <- PCM(model=model.type,k=2)
+    param <- c(y0,
+                    x0,
+                    alpha.y,
+                    0,
+                    -b*alpha.y,
+                    alpha.x,
+                    y0,
+                    x0,
+                    sigma.y,
+                    sigma.x)
+    PCMParamLoadOrStore(true.model, param, offset=0, load=T)
+    
+    gene.param <- c(psi.y[j],psi.x[j],log(alpha.y),log(alpha.x),b,log(sigma.y),log(sigma.x))
+    names(gene.param) <- paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","Sigma_Y_","Sigma_X_"),j)
+    true.param <- c(true.param,gene.param)
+    data.pcm[[j]] <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+  
+  }
+  parameter.matrix[i,] <- true.param
+  names(data.pcm) <- paste0("Gene_",rep(1:num.loci))
+  data.df <- purrr::map(data.pcm,~.x %>% 
+                          t() %>% 
+                          as.data.frame() %>% 
+                          rownames_to_column("Species")) %>% 
+                        bind_rows(.id="Locus") %>%
+             filter(Species %in% ba.tree$tip.label)
+  write_tsv(data.df, file.path("Simulated_data/Parameters_diff_50_loci_0.5_sdlog/",paste0("simulated_data_",i)))
+}
+
+colnames(parameter.matrix) <-c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std",paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","Sigma_Y_","Sigma_X_"),rep(1:num.loci,each=7)))
+
+
+write_tsv(as.data.frame(parameter.matrix),"Simulated_data/true_parameters_used_for_parameters_diff_50_loci.tsv")
+```
+
+
+
+```{r}
+set.seed(50) # for reproducibility
+num.sim <- 100
+num.loci <- 100 # number of loci
+
+ba.tree <- ape::read.nexus("../Data/tree_11sp_noGpig.nex")
+ba.tree <- phytools::force.ultrametric(ba.tree,method = "extend") # tree is not ultrametric due to 
+tip.height <- ips::tipHeights(ba.tree)[1]
+min.edge <- min(ba.tree$edge.length)
+parameter.matrix <- matrix(rep(0,num.sim*(num.loci*7+10)),nrow=num.sim,ncol = 7*num.loci + 10)
+model.type <- "OU__Global_X0__Global_H__Theta__Diagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
+
+for (i in 1:num.sim)
+{
+  # Simulate the optima of the 2 traits across loci
+  psi.x <- rnorm(n=num.loci,mean=0,sd=1)
+  psi.y <- rnorm(n=num.loci,mean=0,sd=1)
+  
+  sigma.x.mean <- runif(n=1,min=-3,max=-2)
+  sigma.y.mean <- runif(n=1,min=-3,max=-2)
+  alpha.x.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  alpha.y.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  b.mean <- runif(n=1,min=0,max=1)
+  
+  data.pcm <- vector(mode="list",length=num.loci)
+  true.param <- c(alpha.y.mean,log(0.5),alpha.x.mean,log(0.5),b.mean,log(0.25),sigma.y.mean,log(0.5),sigma.x.mean,log(0.5))
+  names(true.param) <- c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std")
+  for(j in 1:num.loci)
+  {
+    sigma.x <- rlnorm(n=1,meanlog = sigma.x.mean,sdlog = 0.5)
+    sigma.y <- rlnorm(n=1,meanlog = sigma.y.mean,sdlog = 0.5)
+    alpha.x <- rlnorm(n=1,meanlog = alpha.x.mean,sdlog = 0.5)
+    alpha.y <- rlnorm(n=1,meanlog = alpha.y.mean,sdlog = 0.5)
+    b <- rnorm(n=1,mean=b.mean,sd=0.25)
+    ## Get root state
+    x0 <- psi.x[j]
+    y0 <- psi.y[j] + b*x0
+    true.model <- PCM(model=model.type,k=2)
+    param <- c(y0,
+                    x0,
+                    alpha.y,
+                    0,
+                    -b*alpha.y,
+                    alpha.x,
+                    y0,
+                    x0,
+                    sigma.y,
+                    sigma.x)
+    PCMParamLoadOrStore(true.model, param, offset=0, load=T)
+    
+    gene.param <- c(psi.y[j],psi.x[j],log(alpha.y),log(alpha.x),b,log(sigma.y),log(sigma.x))
+    names(gene.param) <- paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","Sigma_Y_","Sigma_X_"),j)
+    true.param <- c(true.param,gene.param)
+    data.pcm[[j]] <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+  
+  }
+  parameter.matrix[i,] <- true.param
+  names(data.pcm) <- paste0("Gene_",rep(1:num.loci))
+  data.df <- purrr::map(data.pcm,~.x %>% 
+                          t() %>% 
+                          as.data.frame() %>% 
+                          rownames_to_column("Species")) %>% 
+                        bind_rows(.id="Locus") %>%
+             filter(Species %in% ba.tree$tip.label)
+  write_tsv(data.df, file.path("Simulated_data/Parameters_diff_100_loci_0.5_sdlog/",paste0("simulated_data_",i)))
+}
+
+colnames(parameter.matrix) <-c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std",paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","Sigma_Y_","Sigma_X_"),rep(1:num.loci,each=7)))
+
+
+write_tsv(as.data.frame(parameter.matrix),"Simulated_data/true_parameters_used_for_parameters_diff_100_loci.tsv")
+```
+
+
+## With C
+
+### 50 genes
+```{r}
+set.seed(50) # for reproducibility
+num.sim <- 100
+num.loci <- 50 # number of loci
+
+ba.tree <- ape::read.nexus("../Data/tree_11sp_noGpig.nex")
+ba.tree <- phytools::force.ultrametric(ba.tree,method = "extend") # tree is not ultrametric due to 
+tip.height <- ips::tipHeights(ba.tree)[1]
+min.edge <- min(ba.tree$edge.length)
+parameter.matrix <- matrix(rep(0,num.sim*(num.loci*8+12)),nrow=num.sim,ncol = 8*num.loci + 12)
+model.type <- "OU__Global_X0__Global_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
+
+for (i in 1:num.sim)
+{
+  # Simulate the optima of the 2 traits across loci
+  psi.x <- rnorm(n=num.loci,mean=0,sd=1)
+  psi.y <- rnorm(n=num.loci,mean=0,sd=1)
+  
+  sigma.x.mean <- runif(n=1,min=-3,max=-2)
+  sigma.y.mean <- runif(n=1,min=-3,max=-2)
+  alpha.x.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  alpha.y.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  b.mean <- runif(n=1,min=0,max=1)
+  c.mean <- runif(n=1,min=-1,max=1)
+  
+  data.pcm <- vector(mode="list",length=num.loci)
+  true.param <- c(alpha.y.mean,log(0.5),alpha.x.mean,log(0.5),b.mean,log(0.25),c.mean,log(0.25),sigma.y.mean,log(0.5),sigma.x.mean,log(0.5))
+  names(true.param) <- c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","C_Mean","C_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std")
+  for(j in 1:num.loci)
+  {
+    sigma.x <- rlnorm(n=1,meanlog = sigma.x.mean,sdlog = 0.5)
+    sigma.y <- rlnorm(n=1,meanlog = sigma.y.mean,sdlog = 0.5)
+    alpha.x <- rlnorm(n=1,meanlog = alpha.x.mean,sdlog = 0.5)
+    alpha.y <- rlnorm(n=1,meanlog = alpha.y.mean,sdlog = 0.5)
+    b <- rnorm(n=1,mean=b.mean,sd=0.25)
+    c.val <- rnorm(n=1,mean=c.mean,sd=0.25)
+    ## Get root state
+    x0 <- psi.x[j]
+    y0 <- psi.y[j] + (b - (alpha.x*c.val)/alpha.y)*x0
+    true.model <- PCM(model=model.type,k=2)
+    param <- c(y0,
+                    x0,
+                    alpha.y,
+                    0,
+                    alpha.x * c.val -b * alpha.y,
+                    alpha.x,
+                    y0,
+                    x0,
+                    sigma.y,
+                    c.val*sigma.x,
+                    sigma.x)
+    PCMParamLoadOrStore(true.model, param, offset=0, load=T)
+    
+    gene.param <- c(psi.y[j],psi.x[j],log(alpha.y),log(alpha.x),b,c.val,log(sigma.y),log(sigma.x))
+    names(gene.param) <- paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","C_","Sigma_Y_","Sigma_X_"),j)
+    true.param <- c(true.param,gene.param)
+    data.pcm[[j]] <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+  
+  }
+  parameter.matrix[i,] <- true.param
+  names(data.pcm) <- paste0("Gene_",rep(1:num.loci))
+  data.df <- purrr::map(data.pcm,~.x %>% 
+                          t() %>% 
+                          as.data.frame() %>% 
+                          rownames_to_column("Species")) %>% 
+                        bind_rows(.id="Locus") %>%
+             filter(Species %in% ba.tree$tip.label)
+  write_tsv(data.df, file.path("Simulated_data/Parameters_diff_w_c_50_loci_0.5_sdlog/",paste0("simulated_data_",i)))
+}
+
+colnames(parameter.matrix) <-c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","C_Mean","C_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std",paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","C_","Sigma_Y_","Sigma_X_"),rep(1:num.loci,each=8)))
+
+
+write_tsv(as.data.frame(parameter.matrix),"Simulated_data/true_parameters_used_for_parameters_diff_w_c_50_loci.tsv")
+```
+
+
+### 100 genes
+```{r}
+set.seed(50) # for reproducibility
+num.sim <- 100
+num.loci <- 100 # number of loci
+
+ba.tree <- ape::read.nexus("../Data/tree_11sp_noGpig.nex")
+ba.tree <- phytools::force.ultrametric(ba.tree,method = "extend") # tree is not ultrametric due to 
+tip.height <- ips::tipHeights(ba.tree)[1]
+min.edge <- min(ba.tree$edge.length)
+parameter.matrix <- matrix(rep(0,num.sim*(num.loci*8+12)),nrow=num.sim,ncol = 8*num.loci + 12)
+model.type <- "OU__Global_X0__Global_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
+
+for (i in 1:num.sim)
+{
+  # Simulate the optima of the 2 traits across loci
+  psi.x <- rnorm(n=num.loci,mean=0,sd=1)
+  psi.y <- rnorm(n=num.loci,mean=0,sd=1)
+  
+  sigma.x.mean <- runif(n=1,min=-3,max=-2)
+  sigma.y.mean <- runif(n=1,min=-3,max=-2)
+  alpha.x.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  alpha.y.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  b.mean <- runif(n=1,min=0,max=1)
+  c.mean <- runif(n=1,min=-1,max=1)
+  
+  data.pcm <- vector(mode="list",length=num.loci)
+  true.param <- c(alpha.y.mean,log(0.5),alpha.x.mean,log(0.5),b.mean,log(0.25),c.mean,log(0.25),sigma.y.mean,log(0.5),sigma.x.mean,log(0.5))
+  names(true.param) <- c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","C_Mean","C_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std")
+  for(j in 1:num.loci)
+  {
+    sigma.x <- rlnorm(n=1,meanlog = sigma.x.mean,sdlog = 0.5)
+    sigma.y <- rlnorm(n=1,meanlog = sigma.y.mean,sdlog = 0.5)
+    alpha.x <- rlnorm(n=1,meanlog = alpha.x.mean,sdlog = 0.5)
+    alpha.y <- rlnorm(n=1,meanlog = alpha.y.mean,sdlog = 0.5)
+    b <- rnorm(n=1,mean=b.mean,sd=0.25)
+    c.val <- rnorm(n=1,mean=c.mean,sd=0.25)
+    ## Get root state
+    x0 <- psi.x[j]
+    y0 <- psi.y[j] + b*x0
+    true.model <- PCM(model=model.type,k=2)
+    param <- c(y0,
+                    x0,
+                    alpha.y,
+                    0,
+                    alpha.x * c.val - b*alpha.y,
+                    alpha.x,
+                    y0,
+                    x0,
+                    sigma.y,
+                    c.val*sigma.x,
+                    sigma.x)
+    PCMParamLoadOrStore(true.model, param, offset=0, load=T)
+    
+    gene.param <- c(psi.y[j],psi.x[j],log(alpha.y),log(alpha.x),b,c.val,log(sigma.y),log(sigma.x))
+    names(gene.param) <- paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","C_","Sigma_Y_","Sigma_X_"),j)
+    true.param <- c(true.param,gene.param)
+    data.pcm[[j]] <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+  
+  }
+  parameter.matrix[i,] <- true.param
+  names(data.pcm) <- paste0("Gene_",rep(1:num.loci))
+  data.df <- purrr::map(data.pcm,~.x %>% 
+                          t() %>% 
+                          as.data.frame() %>% 
+                          rownames_to_column("Species")) %>% 
+                        bind_rows(.id="Locus") %>%
+             filter(Species %in% ba.tree$tip.label)
+  write_tsv(data.df, file.path("Simulated_data/Parameters_diff_w_c_100_loci_0.5_sdlog/",paste0("simulated_data_",i)))
+}
+
+colnames(parameter.matrix) <-c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","C_Mean","C_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std",paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","C_","Sigma_Y_","Sigma_X_"),rep(1:num.loci,each=8)))
+
+
+write_tsv(as.data.frame(parameter.matrix),"Simulated_data/true_parameters_used_for_parameters_diff_w_c_100_loci.tsv")
+```
+
+### 164 genes
+```{r}
+set.seed(50) # for reproducibility
+num.sim <- 100
+num.loci <- 164 # number of loci
+
+ba.tree <- ape::read.nexus("../Data/tree_11sp_noGpig.nex")
+ba.tree <- phytools::force.ultrametric(ba.tree,method = "extend") # tree is not ultrametric due to 
+tip.height <- ips::tipHeights(ba.tree)[1]
+min.edge <- min(ba.tree$edge.length)
+parameter.matrix <- matrix(rep(0,num.sim*(num.loci*8+12)),nrow=num.sim,ncol = 8*num.loci + 12)
+model.type <- "OU__Global_X0__Global_H__Theta__UpperTriangularWithDiagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
+
+for (i in 1:num.sim)
+{
+  # Simulate the optima of the 2 traits across loci
+  psi.x <- rnorm(n=num.loci,mean=0,sd=1)
+  psi.y <- rnorm(n=num.loci,mean=0,sd=1)
+  
+  sigma.x.mean <- runif(n=1,min=-3,max=-2)
+  sigma.y.mean <- runif(n=1,min=-3,max=-2)
+  alpha.x.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  alpha.y.mean <- runif(n=1,min=log(log(2)/(tip.height/4)),max=log(log(2)/(min.edge*2)))
+  b.mean <- runif(n=1,min=0,max=1)
+  c.mean <- runif(n=1,min=-1,max=1)
+  
+  data.pcm <- vector(mode="list",length=num.loci)
+  true.param <- c(alpha.y.mean,log(0.5),alpha.x.mean,log(0.5),b.mean,log(0.25),c.mean,log(0.25),sigma.y.mean,log(0.5),sigma.x.mean,log(0.5))
+  names(true.param) <- c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","C_Mean","C_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std")
+  for(j in 1:num.loci)
+  {
+    sigma.x <- rlnorm(n=1,meanlog = sigma.x.mean,sdlog = 0.5)
+    sigma.y <- rlnorm(n=1,meanlog = sigma.y.mean,sdlog = 0.5)
+    alpha.x <- rlnorm(n=1,meanlog = alpha.x.mean,sdlog = 0.5)
+    alpha.y <- rlnorm(n=1,meanlog = alpha.y.mean,sdlog = 0.5)
+    b <- rnorm(n=1,mean=b.mean,sd=0.25)
+    c.val <- rnorm(n=1,mean=c.mean,sd=0.25)
+    ## Get root state
+    x0 <- psi.x[j]
+    y0 <- psi.y[j] + b*x0
+    true.model <- PCM(model=model.type,k=2)
+    param <- c(y0,
+                    x0,
+                    alpha.y,
+                    0,
+                    alpha.x * c.val - b*alpha.y,
+                    alpha.x,
+                    y0,
+                    x0,
+                    sigma.y,
+                    c.val*sigma.x,
+                    sigma.x)
+    PCMParamLoadOrStore(true.model, param, offset=0, load=T)
+    
+    gene.param <- c(psi.y[j],psi.x[j],log(alpha.y),log(alpha.x),b,c.val,log(sigma.y),log(sigma.x))
+    names(gene.param) <- paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","C_","Sigma_Y_","Sigma_X_"),j)
+    true.param <- c(true.param,gene.param)
+    data.pcm[[j]] <- PCMSim(tree = ba.tree,model = true.model,X0 = true.model$X0)
+  
+  }
+  parameter.matrix[i,] <- true.param
+  names(data.pcm) <- paste0("Gene_",rep(1:num.loci))
+  data.df <- purrr::map(data.pcm,~.x %>% 
+                          t() %>% 
+                          as.data.frame() %>% 
+                          rownames_to_column("Species")) %>% 
+                        bind_rows(.id="Locus") %>%
+             filter(Species %in% ba.tree$tip.label)
+  write_tsv(data.df, file.path("Simulated_data/Parameters_diff_w_c_164_loci_0.5_sdlog/",paste0("simulated_data_",i)))
+}
+
+colnames(parameter.matrix) <-c("H_Y_Mean","H_Y_Std","H_X_Mean","H_X_Std","Q_Mean","Q_Std","C_Mean","C_Std","Sigma_Y_Mean","Sigma_Y_Std","Sigma_X_Mean","Sigma_X_Std",paste0(c("Psi_Y_","Psi_X_","H_Y_","H_X_","Q_","C_","Sigma_Y_","Sigma_X_"),rep(1:num.loci,each=8)))
+
+
+write_tsv(as.data.frame(parameter.matrix),"Simulated_data/true_parameters_used_for_parameters_diff_w_c_164_loci.tsv")
+```
+
+
