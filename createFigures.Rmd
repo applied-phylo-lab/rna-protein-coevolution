@@ -14,6 +14,8 @@ library(cowplot)
 library(patchwork)
 library(dendextend)
 library(ComplexHeatmap)
+library(scales)
+library(ggpubr)
 
 CleanData <- function(phy, data) {
   cleaned <- geiger::treedata(phy,data,warnings=T)
@@ -40,9 +42,13 @@ slope.color <- "#CCBB44"
 # Plot tree
 
 ```{r fig.width=8}
-ba.tree <- read.nexus("Data/tree_11sp_noGpig.nex")
-ba.tree <- force.ultrametric(ba.tree,method="extend")
-d <- ggimage::phylopic_uid(ba.tree$tip.label)
+tree <- read.tree("Data/vertlife_mcc_dna_only_node_dated.tre")
+tree <- force.ultrametric(tree,method="extend")
+plot(tree)
+```
+
+```{r}
+d <- ggimage::phylopic_uid(tree$tip.label)
 d <- d %>%
   mutate(name = case_when(
       name == "Felis_catus" ~ "Cat",
@@ -59,43 +65,63 @@ d <- d %>%
     ))
 rownames(d) <- d$name
 
-ba.tree$tip.label <- c("Opossum","Rabbit","Rat","Human","Macaque","Pig","Cow","Sheep","Horse","Cat","Dog")
-```
-
-```{r fig.width=5,fig.height=5}
 d <- d %>% mutate(uid=case_when(
   name == "Human"~"b8c16fc6-d16b-4fac-8a04-67182448157e",
   name == "Rat"~"53f8f372-adc0-4247-bc66-0075e241fc95",
   T ~ uid) 
 )
 
-ba.tree <- drop.tip(ba.tree,"Human")
+```
 
-ba.p <- ggtree(ba.tree) %<+% d + 
+```{r}
+mapLatinToCommon <- function(x)
+{
+  common.names <- c("Opossum","Rabbit","Rat","Human","Macaque","Pig","Cow","Sheep","Horse","Cat","Dog")
+  names(common.names) <- c("Monodelphis_domestica",
+                           "Oryctolagus_cuniculus",
+                           "Rattus_norvegicus",
+                           "Homo_sapiens",
+                           "Macaca_mulatta",
+                           "Sus_scrofa",
+                           "Bos_taurus",
+                           "Ovis_aries",
+                           "Equus_caballus",
+                           "Felis_catus",
+                           "Canis_lupus"
+                           )
+  return(common.names[x])
+}
+
+tree$tip.label <- mapLatinToCommon(tree$tip.label)
+tree.no.human <- drop.tip(tree,"Human")
+```
+
+```{r}
+node.date <- read.tree("Data/vertlife_mcc_dna_only_node_dated.tre")
+tip.date <- read.tree("Data/vertlife_mcc_dna_only_fossil_bd.tre")
+ba.tree <- read.nexus("Data/tree_11sp_noGpig.nex")
+plot(ba.tree)
+plot(tip.date)
+plot(node.date)
+```
+
+
+
+```{r fig.width=5,fig.height=5}
+
+tree.p <- ggtree(tree) %<+% d + 
   geom_tiplab(size=6) + 
   geom_tiplab(aes(image=uid), geom="phylopic", offset=30) +
   xlim(0,200) + 
   theme_tree2() +
   theme(axis.text=element_text(size=14,face="bold"))
-ba.p
-ggsave2("Figures/ba_etal_tree.pdf",ba.p,width=9)
+tree.p
+ggsave2("Figures/phylo_tree.pdf",tree.p,width=9)
 
 
 ```
 
-```{r fig.width=4,fig.height=8}
 
-
-ba.tree.filt <- drop.tip(ba.tree,c("Dog","Horse","Sheep","Cow","Pig","Rabbit","Cat","Human"))
-
-ba.filt.p <- ggtree(ba.tree.filt) %<+% d + 
-  geom_tiplab(size=0) + 
-  geom_tiplab(aes(image=uid),size=0.2, geom="phylopic", offset=60) +
-  xlim(c(NA,300)) +
-  theme(axis.text=element_blank())
-ba.filt.p
-
-```
 
 
 
@@ -128,35 +154,35 @@ data.mrna.wide <- data %>%
 pairwise.prot <- cor(data.prot.wide[,2:11],method="spearman")
 pairwise.mrna <- cor(data.mrna.wide[,2:11],method="spearman")
 
-pairwise.prot <- pairwise.prot[ba.tree$tip.label,ba.tree$tip.label]
-pairwise.mrna <- pairwise.mrna[ba.tree$tip.label,ba.tree$tip.label]
+pairwise.prot <- pairwise.prot[tree.no.human$tip.label,tree.no.human$tip.label]
+pairwise.mrna <- pairwise.mrna[tree.no.human$tip.label,tree.no.human$tip.label]
 pairwise.prot[upper.tri(pairwise.prot)] <- pairwise.mrna[upper.tri(pairwise.mrna)]
 
-ba.tree.dend <- as.dendrogram(ba.tree)
+tree.dend <- as.dendrogram(tree.no.human)
 
-col <- circlize::colorRamp2(c(min(pairwise.prot)-0.05,median(pairwise.prot,na.rm=T),1),c("#B2182B", "#F7F7F7", "#2166AC"))
 diag(pairwise.prot) <- NA
 prot.cor <- Heatmap(pairwise.prot,
-        col=col,
+        col = hcl.colors(25, palette = "Blues 3"),
         na_col = "black",
-        cluster_rows = ba.tree.dend,
+        cluster_rows = tree.dend,
         cluster_columns = F,
         name = "Spearman\nCorrelation",
         show_row_names = T,
+        row_dend_width = unit(50, "mm"),
         row_names_side = "left",
         row_title="Protein",
         column_title="mRNA",
         )
 
 prot.cor
-pdf("Figures/across_species_correlations_w_human.pdf",height=7,width=8)
+pdf("Figures/across_species_correlations.pdf",height=7,width=8)
 prot.cor
 dev.off()
 ```
 
 
 ```{r}
-phyl.dist <- cophenetic.phylo(ba.tree)
+phyl.dist <- cophenetic.phylo(tree.no.human)
 phyl.dist[upper.tri(phyl.dist,diag = T)] <- NA
 phyl.dist.long <- as.data.frame(phyl.dist) %>%
   rownames_to_column("Species") %>%
@@ -186,47 +212,15 @@ dist.cor.mrna <- dist.cor %>% filter(Measure == "mRNA")
 ```
 
 ```{r}
-calculateSlope <- function(data,index)
-{
-  tmp <- data[index,]
-  fm0 <- nls(log(Correlation) ~ log(a*exp(b*Distance)), tmp, start = c(a = 1, b = 1))
-  return(coef(fm0))
-}
 
 
-fm0.true <- nls(Correlation ~ a*exp(b*Distance), dist.cor.prot, start = c(a = 0.8, b = 0))
-fm1.true <- nls(Correlation ~ a*exp(b*Distance), dist.cor.mrna, start = c(a = 0.8, b = 0))
-
-preds.prot <- preds.mrna <- data.frame(Distance = unique(phyl.dist.long$Distance))
-#prop <- propagate::predictNLS(fm0.true, newdata = preds.prot)
-#preds.prot$mean <- prop$summary[,2]
-#preds.prot$lcl <- prop$summary[,5]
-#preds.prot$ucl <- prop$summary[,6]
-#preds.prot$Measure <- "Protein"
-
-#prop <- propagate::predictNLS(fm1.true, newdata = preds.mrna)
-#preds.mrna$mean <- prop$summary[,2]
-#preds.mrna$lcl <- prop$summary[,5]
-#preds.mrna$ucl <- prop$summary[,6]
-#preds.mrna$Measure <- "mRNA"
-
-#preds <- rbind(preds.prot,preds.mrna)
-
-#dist.cor <- dist.cor %>%
-#  left_join(preds,by=c("Measure","Distance"))
-
-
-div.p <- ggplot(dist.cor,aes(y=Distance,x=Correlation,color=Measure)) +
+div.p <- ggplot(dist.cor,aes(x=Distance,y=Correlation,color=Measure)) +
   geom_point() +
   theme_cowplot() +
-  # geom_smooth(method="nls",formula=y ~ a*exp(b*x),method.args=list(start = c(a = 0.8, b = 0)),se=F) +
-  # geom_ribbon(aes(x = Distance, y = mean, ymin = lcl, ymax = ucl,color=Measure),
-  #             color="black",alpha=0.25) +
-  #ggtitle("Divergence in gene expression as\nfunction of evolutionary divergence") +
   scale_color_manual(values = c("mRNA"=mrna.color,"Protein"=prot.color)) +
   labs(color="Expression type") +
-  ylab("Divergence Time (MYA)") +
-  xlab("Pairwise Similarity\n(Spearman Correlation)")
+  xlab("Divergence Time (MYA)") +
+  ylab("Pairwise Similarity\n(Spearman Correlation)")
 div.p
 
 ```
@@ -236,7 +230,7 @@ div.p
 ```{r fig.width =12,fig.height=6}
 p <- ((plot_spacer() | grid.grabExpr(draw(prot.cor),wrap = T,wrap.grobs = T)) | (div.p))  +
   plot_annotation(tag_levels = "A") + 
-  plot_layout(widths = c(0,1.5,1),guides = "collect") 
+  plot_layout(widths = c(0,2,1),guides = "collect") 
 p
 
 ggsave2("Figures/Figure_2.pdf",p,width=14,height = 5)
@@ -289,13 +283,13 @@ ggsave2("Figures/mrna_protein_corr_across_species_pic.pdf",mrna.vs.prot.cor)
 ```
 
 
-
+## Comparing models using Deviance Information Criterion
 ```{r}
-load("Results/Drop_human/Pop_average_model_all/Protein_selection_strong/2024-02-05_prot_determines_mrna_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+load("Results/Drop_human/Pop_average_model_all/Protein_selection_strong/2024-10-27_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 prot.dom.fit <- fit
-load("Results/Drop_human/Pop_average_model_all/Protein_selection_weak/2024-02-05_mrna_determines_prot_off_diagonal_sigma_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+load("Results/Drop_human/Pop_average_model_all/Protein_selection_weak/2024-10-27_mrna_determines_prot_off_diagonal_sigma_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 mrna.dom.fit <- fit
-load("Results/Drop_human/Pop_average_model_all/Independent/2024-02-05_independent_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+load("Results/Drop_human/Pop_average_model_all/Independent/2024-10-27_independent_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 indep.fit <- fit
 
 prot.dom.fit$DIC2 - mrna.dom.fit$DIC2
@@ -315,21 +309,20 @@ dic.df <- data.frame(Model =c("Protein-driven","mRNA-driven","Independent"),
 dic.bar <- ggplot(dic.df,aes(x=Model,y=DIC,fill=Model)) +
   geom_col(color="black") +
   theme_cowplot() +
-  #ylab(expression(Delta*"DIC (DIC"["Protein-driven"]*" - DIC)")) +
   ylab("DIC") +
   scale_y_reverse() +
   xlab("") +
   scale_fill_manual(values=c("Protein-driven"=prot.color,"mRNA-driven"=mrna.color,"Independent"="#4477AA")) +
   theme(axis.text.x = element_blank()) +
-  geom_bracket(xmin = "Independent", xmax = "Protein-driven", y.position = -70000,label = as.character(round(dic.df$Delta.DIC[3])), tip.length = c(-0.08, -0.12),vjust = 6,inherit.aes=F,label.size=3) +
-  geom_bracket(xmin = "mRNA-driven", xmax = "Protein-driven", y.position = -62500,label = as.character(round(dic.df$Delta.DIC[2])), tip.length = c(-0.04, -0.07),vjust=3.5,inherit.aes=F,label.size=3)
+  geom_bracket(xmin = "Independent", xmax = "Protein-driven", y.position = -60000,label = as.character(round(dic.df$Delta.DIC[3])), tip.length = c(-0.08, -0.12),vjust = 8,inherit.aes=F,label.size=3) +
+  geom_bracket(xmin = "mRNA-driven", xmax = "Protein-driven", y.position = -54500,label = as.character(round(dic.df$Delta.DIC[2])), tip.length = c(-0.04, -0.07),vjust=4.5,inherit.aes=F,label.size=3)
 dic.bar
 ```
 
 
 
-
 ```{r}
+library(LaplacesDemon,lib.loc="~/R_dev/")
 alpha.b <- prot.dom.fit$Posterior2[,1:5]
 
 hlf.trace <- apply(alpha.b,1,function(x)
@@ -351,7 +344,7 @@ ci.hlf <- p.interval(hlf.trace)
 ```
 
 ```{r}
-library(LaplacesDemon,lib.loc="~/R_dev/")
+
 param.names <- colnames(alpha.b)
 alpha.b.nat.scale <- sapply(param.names,function(x)
   {
@@ -388,7 +381,7 @@ alpha.plot
 
 
 hlf.plot <- ggplot(hlf.df,aes(x=Halflife,fill=Abundance)) +
-  geom_histogram(color="black",alpha=0.8) +
+  geom_histogram(color="black",alpha=0.8,position="identity") +
   xlab("Phylogenetic half-life (MY)") +
   labs(fill="Expression type") +
   ylab("Count") +
@@ -431,8 +424,6 @@ ggsave2("Figures/Figure_3.pdf",total,width=10,height = 7.25)
 
 
 
-
-
 ### Check for consistency across runs
 
 Here, I will be looking at the runs where the human species is dropped from our analysis.
@@ -455,9 +446,9 @@ createSummaryFile <- function(file.path.to.runs)
   purrr::map2(r.object.files ,output,createSummaryFileForTargets)
 }
 
-createSummaryFile("Results/Drop_human/Pop_average_model/Protein_selection_strong")
-createSummaryFile("Results/Drop_human/Pop_average_model/Protein_selection_weak")
-createSummaryFile("Results/Drop_human/Pop_average_model/Independent/")
+createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_strong")    
+createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_weak") 
+createSummaryFile("Results/Drop_human/Pop_average_model_all/Independent")
 
 
 
@@ -466,7 +457,7 @@ createSummaryFile("Results/Drop_human/Pop_average_model/Independent/")
 
 
 ```{r}
-library(scales)
+
 # model should be "Protein Dominant", "mRNA Dominant", "Independent"
 convertParameterSymbolsToPaperSymbols <- function(parameter.names,model = "Protein Dominant")
 {
@@ -508,6 +499,18 @@ compareParameterEstimatesAcrossRuns <- function(file.path.to.summary.files,
     filter(Parameter %in% param) %>%
     mutate(Parameter = convertParameterSymbolsToPaperSymbols(Parameter,model=model))
 
+  prot.sel.strong.pop.param <- prot.sel.strong.pop.param %>%
+    mutate(Run = case_when(
+      Run == "Run_1" ~ "Ba et al. Tree 1",
+      Run == "Run_2" ~ "Ba et al. Tree 2",
+      Run == "Run_3" ~ "Ba et al. Tree 3",
+      Run == "Run_4" ~ "VertLife MCC Tip Dated Tree 1",
+      Run == "Run_5" ~ "VertLife MCC Node Dated Tree 1",
+      Run == "Run_6" ~ "VertLife MCC Node Dated Tree 2",
+      Run == "Run_7" ~ "VertLife MCC Node Dated Tree 3",
+      Run == "Run_8" ~ "VertLife MCC Node Dated Tree 4",
+    ))
+  
   p <- ggplot(prot.sel.strong.pop.param,aes(x=Parameter,y=Mean,color=Run)) +
     geom_point(position=position_dodge(width=0.5),size=2) +
     geom_errorbar(aes(ymin=LB,ymax=UB),position=position_dodge(width=0.5),width=0.2) +
@@ -532,11 +535,9 @@ indep.p <- compareParameterEstimatesAcrossRuns("Results/Drop_human/Pop_average_m
 ```
 
 ```{r fig.width=10,fig.height=3}
-
 comb.plot <- (prot.sel.strong.p | prot.sel.weak.p | indep.p) + 
-  plot_annotation(tag_levels = "A") + 
+  plot_annotation(tag_levels = "A") +
   plot_layout(guides="collect")
-
 comb.plot
 
 ggsave2("Figures/convergence_across_mcmc_runs.pdf",comb.plot,width=15,height=5)
@@ -556,9 +557,13 @@ getDIC <- function(filepath.mcmc.object)
   return(data.frame(Deviance = fit$DIC1[1],Eff.Num.Param=fit$DIC1[2],DIC = fit$DIC1[3]))
 }
 
-getSummaryTable <- function(filepath.mcmc.object)
+getSummaryTable <- function(filepath.mcmc.object,adapt=F)
 {
   load(filepath.mcmc.object)
+  if (adapt==T)
+  {
+    fit <- adapt.fit
+  }
   fit.summary <- as.data.frame(fit$Summary2) %>%
     rownames_to_column("Parameter") %>%
     as.data.frame()
@@ -580,10 +585,10 @@ createDICTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-
   return(dic.table)
 }
 
-createParamTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+")
+createParamTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+",adapt=F)
 {
   names(filepaths.mcmc.obj) <- extractRunNameFromFilePath(mcmc.rda,pattern=pattern)
-  param.table <- lapply(filepaths.mcmc.obj,getSummaryTable) %>%
+  param.table <- lapply(filepaths.mcmc.obj,getSummaryTable,adapt=adapt) %>%
     bind_rows(.id="Data-Model_Fit")
   param.table <- param.table %>%
     separate(`Data-Model_Fit`,sep="/",into = c("Data","Model_Fit"))
@@ -591,8 +596,26 @@ createParamTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[
 }
 
 
+
+getParamTableForSetofRuns <- function(toplevel,mcmc.pattern,model.type="Protein_selection_strong",adapt=F)
+{
+  
+}
+
+adapt<-F
 toplevel <- list.files(path="Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",pattern = "^[0-9]{1,2}-[0-9]{2,3}$",include.dirs = T)
-mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",toplevel),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+prot.strong.mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+prot.weak.mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",toplevel,"Protein_selection_weak","2024-11-14_mrna_determines_prot_off_diagonal_sigma_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+mcmc.rda <- c(prot.strong.mcmc.rda,prot.weak.mcmc.rda)
+
+
+
+# toplevel <- list.files(path="Results/Drop_human/Bin_based_on_species_mean_protein/",pattern = "^[0-9]{1,2}-[0-9]{2,3}$",include.dirs = T)
+# mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_species_mean_protein/",toplevel,"Protein_selection_strong","2024-11-11_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+
+
+# toplevel <- list.files(path="Results/Drop_human/Bin_based_on_paxdb_human_prot_abund_essential/",pattern = "^[0-9]{1,2}-[0-9]{2,3}$",include.dirs = T)
+# mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund_essential/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
 
 dic.table <- createDICTable(mcmc.rda)
 dic.table <- dic.table %>%
@@ -600,7 +623,7 @@ dic.table <- dic.table %>%
   mutate(Delta.DIC = DIC - min(DIC))
 dic.table
 
-prot.dom.param.table <- createParamTable(mcmc.rda) %>%
+prot.dom.param.table <- createParamTable(mcmc.rda,adapt = adapt) %>%
   mutate(Bin.order = case_when(
              Data == "0-10" ~ 1,
              Data == "10-20" ~ 2,
@@ -616,11 +639,15 @@ prot.dom.param.table <- createParamTable(mcmc.rda) %>%
 
 ```
 
+
+
+
+
 ```{r}
 param.table.selection <- prot.dom.param.table %>%
     filter((Parameter == "H_X" | Parameter == "H_Y")  & Model_Fit == "Protein_selection_strong") %>% 
     mutate(Parameter = ifelse(Parameter == "H_X","Protein","mRNA"))
- 
+
 
 
 selec.p <- ggplot(param.table.selection,aes(x=Data,y=Mean,color=Parameter)) +
@@ -667,7 +694,7 @@ q.p <- ggplot(param.table.q,aes(x=Data,y=Mean)) +
 ```
 
 
-```{r fig.width=6,fig.height=2}
+```{r fig.width=8,fig.height=4}
 gene.expr.effect <- (selec.p | tau.p | q.p) + 
   plot_annotation(tag_level = "A") + 
   plot_layout(guides = "collect")
@@ -710,58 +737,73 @@ hsapien.prot.filt <- hsapien.prot.filt %>%
 eqtl.human <- read_tsv("Data/GTEx/eQTL_summary.tsv") %>%
   dplyr::select(gene_id,Mean.abs.effect) %>%
   dplyr::rename(Mean.Abs.eQTL.Effect = Mean.abs.effect)
-number.enhancers.human <- read_csv("Data/Enhancer/human_keratinocyte_enhancer_counts_per_gene.csv") %>% 
+number.enhancers.human <- read_csv("Data/CRE/EnhancerAtlas/human_keratinocyte_enhancer_counts_per_gene.csv") %>% 
   dplyr::rename(Num.Enhancers.Human = Num.Enhancers)
-number.enhancers.mouse <- read_csv("Data/Enhancer/mouse_kidney_enhancer_counts_per_gene_w_human_id.csv") %>% 
+number.cres.human <- read_csv("Data/CRE/Human_cell_atlas/human_cell_atlas_cre.csv") %>% 
+  dplyr::rename(Num.tCREs.Human = Num.Enhancers)
+number.enhancers.mouse <- read_csv("Data/CREr/EnhancerAtlas/mouse_kidney_enhancer_counts_per_gene_w_human_id.csv") %>% 
   dplyr::rename(Num.Enhancers.Mouse = Num.Enhancers) %>%
   dplyr::select(-Gene_ID)
-number.enhancers.fly <- read_csv("Data/Enhancer/fly_bg3c2_enhancer_counts_per_gene_w_human_id.csv") %>%
+number.enhancers.fly <- read_csv("Data/CRE/EnhancerAtlas/fly_bg3c2_enhancer_counts_per_gene_w_human_id.csv") %>%
   dplyr::rename(Num.Enhancers.Fly = Num.Enhancers) %>%
   dplyr::select(-Gene_ID)
-te.human <- read_tsv("Data/Translation_efficiency/human_te_l29.tsv") %>%
+te.human <- read_tsv("Data/Translation_efficiency/ribo_te/human_te_l29.tsv") %>%
   mutate(TE = Ribo_TPM/RNA_TPM)
 
-# start.codon.mrna.struct <- read_tsv("Data/Translation_efficiency/human_vs_mouse_uorfs_ss.tsv") %>%
-#   mutate(SS.Divergence = abs(CDS_sec_struct_EFE_R_Human - CDS_sec_struct_EFE_R_Mouse)) %>%
-#   filter(!is.na(SS.Divergence))
-
-
-# start.codon.mrna.struct <- read_tsv("Data/Translation_efficiency/mrna_secondary_struct/human_vs_mouse_up_and_down_10nt.tsv") %>%
-#   mutate(SS.Divergence = abs(CDS_SS_EFE_Human - CDS_SS_EFE_Mouse)) %>%
-#   filter(!is.na(SS.Divergence) & !is.na(ensembl_gene_id))
-
-phylop <- read_tsv("Data/Translation_efficiency/human_utr5_phyloP.tsv") %>%
-  dplyr::select(gene_id,agg_PGS) %>%
+phylop <- read_tsv("Data/Translation_efficiency/conservation/2024-11-11_human_utr5_phylop.tsv") %>%
+  dplyr::select(ensembl_gene_id,agg_PGS) %>%
   dplyr::rename(Mean.PhyloP = agg_PGS)
 
-utr5.length <- read_tsv("Data/Translation_efficiency/human_vs_mouse_utr5_length_level_1.tsv") %>%
-  dplyr::select(Human,Mean.UTR5.Length_Human,Mean.UTR5.Length_Mouse)
+phast <- read_tsv("Data/Translation_efficiency/conservation/2024-11-11_human_utr5_phast.tsv") %>%
+  dplyr::select(ensembl_gene_id,agg_PGS) %>%
+  dplyr::rename(Mean.Phast = agg_PGS)
+
+utr5.length <- read_tsv("Data/Translation_efficiency/utr5_length/human_vs_mouse_utr5_length_level_all_by_all_princ_isoforms.tsv")
+  
+human.utr5.length <- utr5.length %>%
+  dplyr::select(Human,Max.UTR5.Length_Human) %>%
+  filter(!is.na(Max.UTR5.Length_Human)) %>%
+  filter(Human %in% ba.data$Gene_ID) %>%
+  distinct(Human,.keep_all = T)
+
+mouse.utr5.length <- utr5.length %>%
+  dplyr::select(Gene,Human,Max.UTR5.Length_Mouse) %>%
+  filter(!is.na(Max.UTR5.Length_Mouse)) %>% 
+  filter(Human %in% ba.data$Gene_ID) %>%
+  dplyr::select(-Gene) %>%
+  distinct(Human,.keep_all = T)
+
 
 hsapien.prot.filt <- hsapien.prot.filt %>%
   left_join(eqtl.human,by=c("ensembl_gene_id"="gene_id")) %>%
   left_join(number.enhancers.human,by=c("ensembl_gene_id"="Gene_ID")) %>%
+  left_join(number.cres.human,by=c("ensembl_gene_id"="Gene_ID")) %>%
   left_join(number.enhancers.mouse,by=c("ensembl_gene_id"="Human")) %>%
   left_join(number.enhancers.fly,by=c("ensembl_gene_id"="Human")) %>%
   left_join(te.human,by=c("ensembl_gene_id"="Gene_ID")) %>%
-  left_join(utr5.length,by=c("ensembl_gene_id"="Human")) %>%
-  left_join(phylop,by=c("ensembl_gene_id"="gene_id")) %>%
-  #left_join(start.codon.mrna.struct,by=c("ensembl_gene_id"="Gene")) %>%
+  left_join(human.utr5.length,by=c("ensembl_gene_id"="Human")) %>%
+  left_join(mouse.utr5.length,by=c("ensembl_gene_id"="Human")) %>%
+  left_join(phylop,by=c("ensembl_gene_id")) %>%
+  left_join(phast,by="ensembl_gene_id") %>%
   mutate(Log.TE = log(TE)) %>%
-  filter(!is.na(Bin))
+  filter(!is.na(Bin)) 
 
 human.bin.features <- hsapien.prot.filt %>%
   group_by(Bin) %>%
-  summarize(Mean.Abs.eQTL.Effect=mean(Mean.Abs.eQTL.Effect,na.rm=T),
-            Mean.Num.Enhancers.Human=mean(Num.Enhancers.Human,na.rm=T),
-            Mean.Num.Enhancers.Mouse=mean(Num.Enhancers.Mouse,na.rm=T),
-            Mean.Num.Enhancers.Fly=mean(Num.Enhancers.Fly,na.rm=T),
-            Mean.UTR5.Human = mean(Mean.UTR5.Length_Human,na.rm=T),
-            Mean.UTR5.Mouse = mean(Mean.UTR5.Length_Mouse,na.rm=T),
-            Mean.PhyloP = mean(Mean.PhyloP,na.rm=T),
-            #Median.SS.Diverge = median(SS.Divergence,na.rm=T),
-            Mean.Log.TE = mean(Log.TE,na.rm=T)
+  summarize(Median.Abs.eQTL.Effect=median(Mean.Abs.eQTL.Effect,na.rm=T),
+            Median.Num.Enhancers.Human=median(Num.Enhancers.Human,na.rm=T),
+            Median.Num.tCREs.Human=median(Num.tCREs.Human,na.rm=T),
+            Median.Num.Enhancers.Mouse=median(Num.Enhancers.Mouse,na.rm=T),
+            Median.Num.Enhancers.Fly=median(Num.Enhancers.Fly,na.rm=T),
+            Median.UTR5.Human = median(Max.UTR5.Length_Human,na.rm=T),
+            Median.UTR5.Mouse = median(Max.UTR5.Length_Mouse,na.rm=T),
+            Median.PhyloP = median(Mean.PhyloP,na.rm=T),
+            Median.Phast = median(Mean.Phast,na.rm=T),
+            Median.Log.TE = median(Log.TE,na.rm=T)
             ) %>%
   mutate(Bin = c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100"))
+
+
 
 
 param.table.w.enh.eqtl <- prot.dom.param.table %>%
@@ -780,7 +822,6 @@ param.table.w.enh.eqtl <- prot.dom.param.table %>%
 param.table.w.enh.eqtl <- param.table.w.enh.eqtl %>%
   left_join(human.bin.features,by=c("Data" = "Bin"))
 ```
-
 
 ```{r,fig.height=7,fig.width=7}
 
@@ -821,15 +862,10 @@ ggsave2("Figures/paxdb_human_protein_bins_vs_feature_violin.pdf",plot=feature.vs
 
 ```{r}
 toplevel <- list.files(path="Results/Drop_human/Essential_vs_non_essential/",pattern = "[A-Za-z_]+",include.dirs = T)
-mcmc.rda <- list.files(path=file.path("Results/Drop_human/Essential_vs_non_essential",toplevel),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+mcmc.rda <- list.files(path=file.path("Results/Drop_human/Essential_vs_non_essential",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
 
 ess.param.table <- createParamTable(mcmc.rda,pattern="(Essential|Non_essential)/[A-Za-z_]+")
-ess.dic <- createDICTable(mcmc.rda,pattern="(Essential|Non_essential)/[A-Za-z_]+")
 
-ess.dic <- ess.dic %>%
-  group_by(Data) %>%
-  mutate(Delta.DIC = DIC - min(DIC))
-ess.dic
 ```
 
 
@@ -854,10 +890,10 @@ ess.p
 ```
 
 ```{r}
-load("Results/Drop_human/Essential_vs_non_essential/Essential/Protein_selection_strong/2024-06-13_prot_determines_mrna_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+load("Results/Drop_human/Essential_vs_non_essential/Essential/Protein_selection_strong/2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 ess.fit <- fit
 
-load("Results/Drop_human/Essential_vs_non_essential/Non_essential/Protein_selection_strong/2024-06-13_prot_determines_mrna_prior_based_on_tree_random_start/rwm_mcmc_1.Rda")
+load("Results/Drop_human/Essential_vs_non_essential/Non_essential/Protein_selection_strong/2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 non.ess.fit <- fit
 
 ess.trace <- exp(ess.fit$Posterior2[,c("H_Y","H_X")])
@@ -868,7 +904,45 @@ mean.non.ess <- apply(non.ess.trace,MARGIN = 2,FUN = mean)
 ci.ess <- p.interval(ess.trace)
 ci.non.ess  <- p.interval(non.ess.trace)
 
+mean.ess
+ci.ess
+mean.non.ess
+ci.non.ess
 ```
+
+
+## Haploinsufficient vs. Haplosufficient
+
+```{r}
+toplevel <- list.files(path="Results/Drop_human/Haplosufficient_vs_insufficient/",pattern = "[A-Za-z_]+",include.dirs = T)
+mcmc.rda <- list.files(path=file.path("Results/Drop_human/Haplosufficient_vs_insufficient/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+
+haplo.param.table <- createParamTable(mcmc.rda,pattern="(Haplosufficient|Haploinsufficient)/[A-Za-z_]+")
+
+```
+
+
+```{r fig.width=6,fig.height=5}
+param.table.haplo<- haplo.param.table %>%
+    filter(Model_Fit == "Protein_selection_strong") %>%
+    filter((Parameter == "H_X" | Parameter == "H_Y")) %>%
+    mutate(Parameter = ifelse(Parameter == "H_X","Protein","mRNA")) %>%
+   dplyr::rename(Abundance = Parameter)
+
+haplo.p <- ggplot(param.table.haplo,aes(x=Data,y=Mean,color=Abundance)) +
+    geom_point(position=position_dodge(width=0.5)) +
+    geom_errorbar(aes(ymin=LB,ymax=UB),width=0,position=position_dodge(width=0.5)) +
+    theme_cowplot() +
+    xlab("") +
+    labs(color="Expression type") +
+    ylab("Rate of adaptation (Log scale)") +
+    scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color))
+haplo.p
+
+ggsave2("Figures/haploinsufficient.pdf",haplo.p,width = 6,height = 5)
+
+```
+
 
 ## Gene expression and gene architecture
 
@@ -888,9 +962,9 @@ sel.vs.gene.exp.p
 
 
 
-sel.vs.eqtl <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Mean.Abs.eQTL.Effect,y=Mean,color=Abundance)) +
+sel.vs.eqtl <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Abs.eQTL.Effect,y=Mean,color=Abundance)) +
   geom_point() +
-  xlab("Mean magnitude of eQTL effect") +
+  xlab("Median magnitude of eQTL effect") +
   ylab("Rate of adaptation (Log scale)") +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
@@ -901,15 +975,21 @@ sel.vs.eqtl <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selecti
 
 
 sel.vs.eqtl
+
+ggsave2("Figures/rate_of_adapt_vs_eQTL.pdf",plot=sel.vs.eqtl,height = 5)
 ```
 
 
-### Enhancer evolution
+### Cis-regulatory elements and evolutionary dynamics
+
+
+
+#### Humans
 
 ```{r}
-sel.vs.enh <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Mean.Num.Enhancers.Human,y=Mean,color=Abundance)) +
+sel.vs.enh <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Num.Enhancers.Human,y=Mean,color=Abundance)) +
   geom_point() +
-  xlab("Mean number of enhancers per gene") +
+  xlab("Median number of enhancers per gene") +
   ylab("Rate of adaptation (Log scale)") +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   geom_errorbar(aes(ymin=LB,ymax=UB), width=0) +
@@ -920,82 +1000,99 @@ sel.vs.enh <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selectio
 
 sel.vs.enh
 
+sel.vs.cre <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Num.CREs.Human,y=Mean,color=Abundance)) +
+  geom_point() +
+  xlab("Median number of tCREs per gene") +
+  ylab("Rate of adaptation (Log scale)") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  geom_errorbar(aes(ymin=LB,ymax=UB), width=0) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot() + 
+  labs(color="Expression type") +
+  facet_wrap(~Abundance) +
+  ggtitle("Human (single-cell 5'-RNA-seq cell tCREs)")
 
-```
+sel.vs.cre
 
-
-
-
-
-```{r}
-
-```
-
-
-```{r fig.height=4,fig.width=5}
 tau.w.enh.eqtl <- param.table.w.enh.eqtl %>%
   filter(Parameter.type == "Drift") %>%
   group_by(Data) %>%
   mutate(Sigma.Diff = Mean - Mean[Abundance == "Protein"]) %>%
   filter(Abundance == "mRNA")
 
-tau.diff.vs.enh.human <- ggplot(tau.w.enh.eqtl,aes(x=Mean.Num.Enhancers.Human,y=Sigma.Diff)) +
+tau.diff.vs.enh.human <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.Enhancers.Human,y=Sigma.Diff)) +
   geom_point() +
-  xlab("Mean number of enhancers per gene") +
+  xlab("Median number of enhancers per gene") +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   ylab(expression("Log("*tau[R]*") - Log("*tau[P]*")")) +
   theme_cowplot()
 tau.diff.vs.enh.human
 
-tau.diff.vs.enh.mouse <- ggplot(tau.w.enh.eqtl,aes(x=Mean.Num.Enhancers.Mouse,y=Sigma.Diff)) +
+tau.diff.vs.cre.human <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.CREs.Human,y=Sigma.Diff)) +
   geom_point() +
-  xlab("Mean number of enhancers per gene") +
+  xlab("Median number of tCREs per gene") +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  ylab(expression("Log("*tau[R]*") - Log("*tau[P]*")")) +
+  theme_cowplot()
+tau.diff.vs.cre.human
+
+
+```
+
+
+#### Mouse and Fly
+
+```{r fig.height=8,fig.width=8}
+
+tau.diff.vs.enh.mouse <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.Enhancers.Mouse,y=Sigma.Diff)) +
+  geom_point() +
+  xlab("Median number of enhancers per gene") +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   ylab(expression("Log("*tau[R]*") - Log("*tau[P]*")")) +
   theme_cowplot() 
 
-tau.diff.vs.enh.fly <- ggplot(tau.w.enh.eqtl,aes(x=Mean.Num.Enhancers.Fly,y=Sigma.Diff)) +
+tau.diff.vs.enh.fly <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.Enhancers.Fly,y=Sigma.Diff)) +
   geom_point() +
-  xlab("Mean number of enhancers per gene") +
+  xlab("Median number of enhancers per gene") +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   ylab(expression("Log("*tau[R]*") - Log("*tau[P]*")")) +
   theme_cowplot() 
 
 
 
-sel.vs.enh.mouse <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Mean.Num.Enhancers.Mouse,y=Mean,color=Abundance)) +
+sel.vs.enh.mouse <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Num.Enhancers.Mouse,y=Mean,color=Abundance)) +
   geom_point() +
-  xlab("Mean number of enhancers per gene") +
+  xlab("Median number of enhancers per gene") +
   ylab("Rate of adaptation (Log scale)") +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
-  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
   labs(color="Expression type") +
   facet_wrap(~Abundance) +
   ggtitle("Mouse")
 
-sel.vs.enh.fly <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Mean.Num.Enhancers.Fly,y=Mean,color=Abundance)) +
+sel.vs.enh.fly <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Num.Enhancers.Fly,y=Mean,color=Abundance)) +
   geom_point() +
-  xlab("Mean number of enhancers per gene") +
+  xlab("Median number of enhancers per gene") +
   ylab("Rate of adaptation (Log scale)") +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
-  geom_errorbar(aes(ymin=LB,ymax=UB)) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
   labs(color="Expression type") +
   facet_wrap(~Abundance) +
   ggtitle("Fly")
 
-
-mouse.fly.enh <- (sel.vs.enh.mouse + tau.diff.vs.enh.mouse + sel.vs.enh.fly + tau.diff.vs.enh.fly) + plot_layout(guides="collect",nrow=2)
+mouse.fly.enh <- (sel.vs.enh.mouse + tau.diff.vs.enh.mouse + sel.vs.enh.fly + tau.diff.vs.enh.fly + sel.vs.cre + tau.diff.vs.cre.human) + plot_layout(guides="collect",nrow=3)
 mouse.fly.enh
-#ggsave2("Figures/mouse_fly_enhancer.pdf",mouse.fly.enh,width = 10,height=9)
+ggsave2("Figures/mouse_fly_enhancer.pdf",mouse.fly.enh,width = 9,height=9)
 
 ```
 
-
 ### mRNA secondary structure divergence
+
+#### Based on Appris Princial Isoforms
 
 ```{r}
 hsapien.prot <- read_tsv("Data/PaxDB/paxdb_human_whole_organism_prot_abundance_integrated.tsv",comment="#") %>%
@@ -1024,12 +1121,12 @@ hsapien.prot.filt <- hsapien.prot.filt %>%
          Bin = Hmisc::cut2(log10.abundance,g = 10))
 
 
-start.codon.mrna.struct <- read_tsv("Data/Translation_efficiency/mrna_secondary_struct/human_vs_mouse_up_and_down_50nt.tsv") %>%
+start.codon.mrna.struct <- read_tsv("Data/Translation_efficiency/mrna_secondary_struct/human_vs_mouse_start_codon_ss_transcript_id_appris_1_mane_select.tsv") %>%
   mutate(SS.Divergence = abs(CDS_SS_EFE_Human - CDS_SS_EFE_Mouse)) %>%
   filter(!is.na(SS.Divergence) & !is.na(ensembl_gene_id))
 
 hsapien.prot.filt.ss.div <- hsapien.prot.filt %>%
-  right_join(start.codon.mrna.struct,by="ensembl_gene_id") %>%
+  dplyr::right_join(start.codon.mrna.struct,by="ensembl_gene_id") %>%
   filter(!is.na(Bin))
 
 bin.ss.div <- hsapien.prot.filt.ss.div %>%
@@ -1077,13 +1174,103 @@ sel.vs.mrna.ss.diverge.all.nt <- ggplot(ss.div.per.nt.per.bin,aes(x=Distance,y=c
   labs(color = "Expression type") +
   theme_cowplot()
 
+sel.vs.mrna.ss.diverge.all.nt
+```
+
+#### Based on Chew et al. transcripts
+
+Repeating the analysis of mRNA secondary structures, but using transcripts as identified in Chew et al Nat. Comm. 2016.   
+
+```{r}
+hsapien.prot <- read_tsv("Data/PaxDB/paxdb_human_whole_organism_prot_abundance_integrated.tsv",comment="#") %>%
+  mutate(string_external_id = str_remove(string_external_id,"9606."))
+
+ensembl.prot.to.gene <- read_tsv("Data/PaxDB/hsapien_gene_mapping.tsv")
+
+hsapien.prot <- hsapien.prot %>%
+  left_join(ensembl.prot.to.gene,by=c("string_external_id"="ensembl_peptide_id"))
+
+ba.data <- read_tsv("Data/mean_se_rna_protein.tsv")
+ba.genes <- ba.data %>%
+  dplyr::select(Gene_ID) %>%
+  deframe() %>%
+  unique()
+
+hsapien.prot.filt <- hsapien.prot %>%
+  filter(ensembl_gene_id %in% ba.genes) %>% 
+  group_by(ensembl_gene_id) %>% 
+  summarize(abundance = sum(abundance))
+
+missing.ids <- ba.genes[which(!ba.genes %in% hsapien.prot.filt$ensembl_gene_id)]
+
+hsapien.prot.filt <- hsapien.prot.filt %>%
+  mutate(log10.abundance = log10(abundance),
+         Bin = Hmisc::cut2(log10.abundance,g = 10))
+
+
+start.codon.mrna.struct <- read_tsv("Data/Translation_efficiency/mrna_secondary_struct/human_vs_mouse_start_codon_ss_chew_etal_transcripts.tsv") %>%
+  mutate(SS.Divergence = abs(CDS_SS_EFE_Human - CDS_SS_EFE_Mouse)) %>%
+  filter(!is.na(SS.Divergence) & !is.na(ensembl_gene_id))
+
+hsapien.prot.filt.ss.div <- hsapien.prot.filt %>%
+  dplyr::right_join(start.codon.mrna.struct,by="ensembl_gene_id") %>%
+  filter(!is.na(Bin))
+
+bin.ss.div <- hsapien.prot.filt.ss.div %>%
+  group_by(Bin,Distance) %>%
+  summarize(Median.SS.Diverge = median(SS.Divergence,na.rm=T))
+
+new.labels <- c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100")
+names(new.labels) <- levels(bin.ss.div$Bin)
+bin.ss.div$Bin <- unname(new.labels[bin.ss.div$Bin])
+
+param.table.w.ss <- prot.dom.param.table %>%
+    filter((Parameter %in% c("H_Y","H_X","Q","Sigma_Y","Sigma_X"))  & Model_Fit == "Protein_selection_strong") %>%
+    mutate(Abundance = case_when(
+      Parameter %in% c("H_X","Sigma_X") ~ "Protein",
+      Parameter %in% c("H_Y","Sigma_Y") ~ "mRNA",
+      TRUE ~ "Slope"
+    ),
+    Parameter.type = case_when(
+      Parameter %in% c("H_X","H_Y") ~ "Selection",
+      Parameter %in% c("Sigma_X","Sigma_Y") ~ "Drift",
+      TRUE ~ "Slope"
+    ))
+
+param.table.w.ss <- param.table.w.ss %>%
+  right_join(bin.ss.div,by=c("Data" = "Bin"))
 
 ```
+```{r}
+ss.div.per.nt.per.bin <- param.table.w.ss %>% 
+  filter(Model_Fit == "Protein_selection_strong" & Parameter.type == "Selection") %>%
+  dplyr::select(Data,Mean,Abundance,Distance,Median.SS.Diverge) %>%
+  nest(Data,Mean,Median.SS.Diverge) %>%
+  mutate(cor = purrr::map(data,~cor(.x$Mean,.x$Median.SS.Diverge,use="pairwise.complete.obs",method="spearman"))) %>%
+  unnest(cor)
+
+
+sel.vs.mrna.ss.diverge.all.nt.chew <- ggplot(ss.div.per.nt.per.bin,aes(x=Distance,y=cor)) +
+  geom_point(aes(color=Abundance)) +
+  geom_smooth(aes(color=Abundance)) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  ylab("Spearman correlation:\nRate of adaptation vs. free energy divergence") +
+  xlab("Distance from start codon (nt)") +
+  geom_vline(xintercept = 0,linetype="dashed")+
+  labs(color = "Expression type") +
+  theme_cowplot()
+
+sel.vs.mrna.ss.diverge.all.nt.chew
+
+ggsave2("Figures/mrna_ss_divergence_using_chew_etal_transcripts.pdf",plot = sel.vs.mrna.ss.diverge.all.nt.chew,width=7,height=5)
+
+```
+
 
 ### 5'-UTR PhyloP scores
 
 ```{r}
-sel.vs.phylo.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection") ,aes(x=Mean.PhyloP,y=Mean,color=Abundance)) +
+sel.vs.phylo.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection") ,aes(x=Median.PhyloP,y=Mean,color=Abundance)) +
   geom_point() +
   xlab("Human 5'-UTR PhyloP scores") +
   ylab(expression("Rate of adaptation (Log scale)")) +
@@ -1096,22 +1283,27 @@ sel.vs.phylo.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
 
 sel.vs.phylo.p
 
-ggsave2("Figures/adaptation_vs_phylop.pdf",sel.vs.phylo.p,height=4)
 
-# sel.vs.mrna.ss.diverge <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection") ,aes(x=Median.SS.Diverge,y=Mean,color=Abundance)) +
-#   geom_point() +
-#   xlab("Median absolute divergence of folding free energy\nHuman vs. Mice") +
-#   ylab(expression("Rate of adaptation (Log scale)")) +
-#   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
-#   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
-#   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
-#   theme_cowplot() + 
-#   labs(color="Expression type") +
-#   facet_wrap(~Abundance)
-# 
-# sel.vs.mrna.ss.diverge
+sel.vs.phast.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection") ,aes(x=Median.Phast,y=Mean,color=Abundance)) +
+  geom_point() +
+  xlab("Human 5'-UTR phastCons scores") +
+  ylab(expression("Rate of adaptation (Log scale)")) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
+  theme_cowplot() + 
+  labs(color="Expression type") +
+  facet_wrap(~Abundance)
+
+sel.vs.phast.p
+
+seq.scores <- (sel.vs.phast.p / sel.vs.phylo.p) + plot_annotation(tag_levels = "A") + plot_layout(guides = "collect")
+
+ggsave2("Figures/adaptation_vs_phylop.pdf",seq.scores,height = 8,width=8)
+
 
 ```
+
 
 ### 5'-UTR and translation efficiency
 
@@ -1127,55 +1319,98 @@ te.opt.per.bin <- prot.dom.param.table %>%
   left_join(a.r.slope,by="Data") %>%
   mutate(Protein_opt = Psi_X, 
          mRNA_opt = Psi_Y + Mean * Psi_X,
-         TE_opt = Protein_opt - mRNA_opt)%>%
+         TE_opt = Protein_opt - mRNA_opt,
+         Theta.Ratio = Psi_X - Psi_Y) %>%
   group_by(Data) %>%
-  summarize(Mean.Opt.TE = mean(TE_opt))
+  summarize(Median.Theta.P = median(Psi_X),
+            Median.Theta.R = median(Psi_Y),
+            Median.Opt.TE = median(TE_opt),
+            Median.Theta.Ratio = median(Theta.Ratio),
+            a_R = mean(Mean),
+            a_R.Theta.P = median(a_R * Psi_X))
 
 te.opt.per.bin <- te.opt.per.bin %>% 
   left_join(human.bin.features,by=c("Data" = "Bin"))
 
 
-opt.te.vs.human.te <- ggplot(te.opt.per.bin,aes(x=Mean.Opt.TE,y=Mean.Log.TE)) +
+opt.te.vs.human.te <- ggplot(te.opt.per.bin,aes(x=Median.Opt.TE,y=Median.Log.TE)) +
   geom_point() +
   theme_cowplot() +
-  xlab("Mean Log(Optimal TE)") +
-  ylab("Mean Human Log(TE)") +
+  xlab("Median Log(Optimal TE)") +
+  ylab("Median Human Log(TE)") +
   geom_abline(intercept=0,slope=1,linetype="dashed") +
-  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
-  theme(aspect.ratio = 1)
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) 
 opt.te.vs.human.te
 
 ggsave2("Figures/ribo_te_vs_optimum_te.pdf",opt.te.vs.human.te,width=4,height = 4)
 
 ```
 
-
-
-
 ```{r}
-slope.vs.utr.human <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Slope") ,aes(x=Mean.UTR5.Human,y=Mean)) +
+binned.expr <- list.files("Data/Bin_based_on_paxdb_human_prot_abund/10_groups/",full.names = T)
+df <- purrr::map(binned.expr,read_tsv,col_types=cols())
+names(df) <- c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100")
+test <- lapply(df,function(x){
+  x <- x %>%
+    split(f=as.factor(.$Species))
+  slopes <- lapply(x,function(y)
+    {
+    lmodel2::lmodel2(Mean_RNA ~ Mean_Protein,data=y,range.x="interval",range.y="interval") %>% broom::tidy()
+  }) %>% bind_rows(.id="Species")
+}) %>% bind_rows(.id="Data")
+
+test.rma <- test %>%
+  filter(method=="RMA" & term == "Slope" & Species != "Homo_sapiens")
+
+summary.rma <- test.rma %>%
+  group_by(Data) %>%
+  summarize(Mean.Slope = mean(estimate),
+            SD.Slope = sd(estimate))
+
+summary.rma <- summary.rma %>%
+  left_join(param.table.q)
+
+rma.vs.ar <- ggplot(summary.rma,aes(y=Mean,x=Mean.Slope)) +
   geom_point(color=slope.color) +
-  xlab("Mean length of 5'-UTRs") +
-  ylab(expression("Evolutionary slope a"[R])) +
-  geom_errorbar(aes(ymin=LB,ymax=UB),width=0,color=slope.color) +
-  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
-  theme_cowplot()
+  #ggrepel::geom_text_repel() +
+  geom_errorbar(aes(ymin=LB,ymax=UB),height=0,color=slope.color) +
+  geom_errorbarh(aes(xmin=Mean.Slope - SD.Slope,xmax=Mean.Slope + SD.Slope),height=0,color=slope.color) +
+  theme_cowplot() +
+  ylab(expression("a"[R])) +
+  xlab("Mean Ranged Major Axis Slope\nR ~ P") +
+  stat_cor(method="spearman",aes(label=..r.label..)) 
+rma.vs.ar
 
 
-slope.vs.utr.mouse <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Slope") ,aes(x=Mean.UTR5.Mouse,y=Mean)) +
-  geom_point(color=slope.color) +
-  xlab("Mean length of 5'-UTRs") +
-  ylab(expression("Evolutionary slope a"[R])) +
-  geom_errorbar(aes(ymin=LB,ymax=UB),width=0,color=slope.color) +
-  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
-  theme_cowplot()
-
-ggsave2("Figures/mouse_utr_length.pdf",slope.vs.utr.mouse,width=5,height = 5)
-
-slope.vs.utr.human | slope.vs.utr.mouse + plot_annotation(tag_levels = "A")
 ```
 
+## 5'-UTR length 
 
+```{r}
+
+slope.vs.utr.human <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Slope") ,aes(x=Median.UTR5.Human,y=Mean)) +
+  geom_point(color=slope.color) +
+  xlab("Median length of 5'-UTRs") +
+  ylab(expression("Evolutionary slope a"[R])) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0,color=slope.color) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  theme_cowplot()
+
+
+slope.vs.utr.mouse <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Slope") ,aes(x=Median.UTR5.Mouse,y=Mean)) +
+  geom_point(color=slope.color) +
+  xlab("Median length of 5'-UTRs") +
+  ylab(expression("Evolutionary slope a"[R])) +
+  geom_errorbar(aes(ymin=LB,ymax=UB),width=0,color=slope.color) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  theme_cowplot()
+
+
+
+human.mouse.utr.length <- slope.vs.utr.human | slope.vs.utr.mouse + plot_annotation(tag_levels = "A")
+
+ggsave2("Figures/human_mouse_utr_length.pdf",human.mouse.utr.length,width=10,height = 5)
+```
 
 
 
@@ -1189,7 +1424,7 @@ CCDD
 
 fig.3 <- dic.bar + alpha.plot + sel.vs.gene.exp.p + ess.p + plot_annotation(tag_levels="A") + plot_layout(design = layout)
 
-ggsave2("Figures/Figure_3_science.pdf",fig.3,width=11,height = 8)
+ggsave2("Figures/Figure_3_science.pdf",fig.3,width=12,height = 9)
 
 ```
 
@@ -1200,9 +1435,15 @@ CCDD
 EEFF
 "
 
-fig.4 <- sel.vs.enh + sel.vs.eqtl + sel.vs.mrna.ss.diverge.all.nt + slope.plot + q.p + slope.vs.utr.human + plot_annotation(tag_levels="A") + plot_layout(design = layout)
+fig.4 <- sel.vs.enh + sel.vs.mrna.ss.diverge.all.nt + slope.plot + q.p + rma.vs.ar + plot_annotation(tag_levels="A") + plot_layout(design = layout)
 fig.4
-ggsave2("Figures/Figure_4_science.pdf",fig.4,width=12,height = 12)
+ggsave2("Figures/Figure_4_science.pdf",fig.4,width=12,height = 12.5)
 
 ```
+
+
+
+
+
+
 
