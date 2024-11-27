@@ -17,12 +17,11 @@ data.split <- data %>%
   group_split()
 
 bin.names <- c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100")
-#bin.names <- c("0-20","20-40","40-60","60-80","80-100")
 
 
 lapply(1:length(bin.names),function(x)
   {
-   write_tsv(data.split[[x]] %>% dplyr::select(-Bin),paste0("../Data/Bin_based_on_mrna/5_groups/mean_se_rna_protein_",bin.names[x],".tsv"))
+   write_tsv(data.split[[x]] %>% dplyr::select(-Bin),paste0("../Data/Bin_based_on_mrna/10_groups/mean_se_rna_protein_",bin.names[x],".tsv"))
 })
 
   

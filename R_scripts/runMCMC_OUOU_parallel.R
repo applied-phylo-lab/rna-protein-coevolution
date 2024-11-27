@@ -16,7 +16,7 @@ parser$add_argument("--burnin_samples",help="Number of samples to perform RWM be
 parser$add_argument("--adapt_samples",help="Number of samples to perform adapting (RAM)",type="integer",default=10000)
 parser$add_argument("-t","--thin",help="Thinning value. Total number of iterations will be samples * thinning",type="integer",default=5)
 parser$add_argument("--alpha_star",type="double",default=0.44)
-parser$add_argument("--tree",type="character",default="../Data/tree_11sp_noGpig.nex")
+parser$add_argument("--tree",type="character",default="Data/vertlife_mcc_dna_only_node_dated.tre")
 parser$add_argument("--prev_adapt_run",type="character",default=NULL)
 parser$add_argument("--prev_rwm_run",type="character",default=NULL)
 parser$add_argument("--rwm_run_number",type="integer",default=1)
@@ -25,10 +25,16 @@ parser$add_argument("--randomize_psi_start_sd",type="double",default=0,help="Psi
 parser$add_argument("--newick",action="store_true")
 parser$add_argument("--independent_evo",action="store_true",help="Traits are assumed to be evolving independently, i.e. all off-diagonals of matrices are 0")
 parser$add_argument("--reverse_trait_order",action="store_true",help="Reverse the order of the traits in the data matrices. This determines the response and predictor trait.")
-parser$add_argument("--sigma_off_diagonal",action="store_true")
+parser$add_argument("--sigma_off_diagonal",action="store_true",help="For the mRNA-dominant model, include the effects of mutations to mRNA on proteins")
+parser$add_argument("--mrna_mutations_matter",action="store_true",help="For the protein-dominant model, include the effects of mutations to mRNA on protein")
 parser$add_argument("--omit_root",action="store_true")
 parser$add_argument("--no_std_err",action="store_true",help="Ignore standard error estimates.")
 parser$add_argument("--num_cores",type="integer",default=12)
+parser$add_argument("--h_sd",type="double",default=1.5)
+parser$add_argument("--sigma_sd",type="double",default=1.5)
+parser$add_argument("--psi_sd",type="double",default=1)
+parser$add_argument("--q_sd",type="double",default=1)
+parser$add_argument("--c_sd",type="double",default=1)
 parser$add_argument("--PCM_options_file",type="character",default=NULL,help="R file that will be sourced. Should contain commands for setting PCM options. Please provide the absolute path or path relative to this file. Default=NULL.")
 parser$add_argument("--drop_species",type="character",default=NULL,help="A semi-colon delimited list with species to drop from data and tree")
 
@@ -47,6 +53,7 @@ newick <- args$newick
 independent.evo <- args$independent_evo
 reverse.trait.order <- args$reverse_trait_order
 sigma.off.diagonal <- args$sigma_off_diagonal
+mrna.mutations.matter <- args$mrna_mutations_matter
 omit.root <- args$omit_root
 prev.adapt.run <- args$prev_adapt_run
 prev.rwm.run <- args$prev_rwm_run
@@ -57,6 +64,11 @@ start.values.file <- args$start_values_file
 PCM.options.file <- args$PCM_options_file
 psi.random.sd <- args$randomize_psi_start_sd
 drop.species <- args$drop_species
+h.variance <- args$h_sd
+sigma.variance <- args$sigma_sd
+psi.variance <- args$psi_sd
+q.variance <- args$q_sd
+c.variance <- args$c_sd
 
 if(!is.null(PCM.options.file))
 {
@@ -72,6 +84,10 @@ Model_OUOU_independent_evolution <- function(parm, Data)
   ll_fun <- Data[["ll_fun"]]
   prop <- Data[["prop"]]
   gene.ll <- Data[["Gene.LL"]]
+  tip.height <- Data[["tip.height.prior"]]
+  h.var <- Data[["h.var"]]
+  sigma.var <- Data[["sigma.var"]]
+  psi.var <- Data[["psi.var"]]
   if (prop[1] >= pos.psi[1] && !is.null(gene.ll))
   {
     gene.index <- floor((prop[1] - 4 - 1)/2) + 1
@@ -103,9 +119,9 @@ Model_OUOU_independent_evolution <- function(parm, Data)
     )
     LL <- sum(gene.ll)
   }
-  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(173/4)),sdlog = 1.5,log=T)) + 
-    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = 1.5,log=T))
-  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = 1.0,log=T))
+  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(tip.height/4)),sdlog = h.var,log=T)) +
+    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = sigma.var,log=T))
+  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = psi.var,log=T))
   LP.unc <- LL + PR + HYP
   LP <- LP.unc + sum(log(c(h,sigma)))
   Modelout <- list(LP=LP,Dev=-2*LL, Monitor=c(LP,LP.unc,LL,PR,HYP), yhat=1, parm=parm,Parameter.LL=gene.ll)
@@ -121,6 +137,10 @@ Model_OUOU_independent_evolution_omit_root <- function(parm, Data)
   ll_fun <- Data[["ll_fun"]]
   prop <- Data[["prop"]]
   gene.ll <- Data[["Gene.LL"]]
+  tip.height <- Data[["tip.height.prior"]]
+  h.var <- Data[["h.var"]]
+  sigma.var <- Data[["sigma.var"]]
+  psi.var <- Data[["psi.var"]]
   if (prop[1] >= pos.psi[1] && !is.null(gene.ll))
   {
     gene.index <- floor((prop[1] - 4 - 1)/2) + 1
@@ -152,9 +172,9 @@ Model_OUOU_independent_evolution_omit_root <- function(parm, Data)
     )
     LL <- sum(gene.ll)
   }
-  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(173/4)),sdlog = 1.5,log=T)) + 
-    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = 1.5,log=T))
-  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = 1,log=T))
+  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(tip.height/4)),sdlog = h.var,log=T)) +
+    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = sigma.var,log=T))
+  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = psi.var,log=T))
   LP.unc <- LL + PR + HYP
   LP <- LP.unc + sum(log(c(h,sigma)))
   Modelout <- list(LP=LP,Dev=-2*LL, Monitor=c(LP,LP.unc,LL,PR,HYP), yhat=1, parm=parm,Parameter.LL=gene.ll)
@@ -172,6 +192,11 @@ Model_OUOU_correlated_evolution <- function(parm, Data)
   ll_fun <- Data[["ll_fun"]]
   prop <- Data[["prop"]]
   gene.ll <- Data[["Gene.LL"]]
+  tip.height <- Data[["tip.height.prior"]]
+  h.var <- Data[["h.var"]]
+  sigma.var <- Data[["sigma.var"]]
+  q.var <- Data[["q.var"]]
+  psi.var <- Data[["psi.var"]]
   if (prop[1] >= pos.psi[1] && !is.null(gene.ll))
   {
     gene.index <- floor((prop[1] - 5 - 1)/2) + 1
@@ -207,10 +232,10 @@ Model_OUOU_correlated_evolution <- function(parm, Data)
     )
     LL <- sum(gene.ll)
   }
-  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(173/4)),sdlog = 1.5,log=T)) +
-    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = 1.5,log=T)) +
-    dnorm(b,mean = 0,sd = 1,log=T)
-  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = 1,log=T))
+  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(tip.height/4)),sdlog = h.var,log=T)) +
+    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = sigma.var,log=T)) +
+    dnorm(b,mean = 0,sd = q.var,log=T)
+  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = psi.var,log=T))
   LP.unc <- LL + PR + HYP
   LP <- LP.unc + sum(log(c(h,sigma)))
   Modelout <- list(LP=LP,Dev=-2*LL, Monitor=c(LP,LP.unc,LL,PR,HYP), yhat=1, parm=parm,Parameter.LL=gene.ll)
@@ -227,6 +252,11 @@ Model_OUOU_correlated_evolution_omit_root <- function(parm, Data)
   ll_fun <- Data[["ll_fun"]]
   prop <- Data[["prop"]]
   gene.ll <- Data[["Gene.LL"]]
+  tip.height <- Data[["tip.height.prior"]]
+  h.var <- Data[["h.var"]]
+  sigma.var <- Data[["sigma.var"]]
+  q.var <- Data[["q.var"]]
+  psi.var <- Data[["psi.var"]]
   if (prop[1] >= pos.psi[1] && !is.null(gene.ll))
   {
     gene.index <- floor((prop[1] - 5 - 1)/2) + 1
@@ -248,8 +278,8 @@ Model_OUOU_correlated_evolution_omit_root <- function(parm, Data)
     gene.ll <- unlist(mclapply(1:num.genes, function(current.loci)
     {
       par.index <- 5 + 2*(current.loci-1) + 1
-      ll <- ll_fun[[current.loci]](c(parm[par.index] + b*parm[par.index+1],
-                                     parm[par.index+1],
+      ll <- ll_fun[[current.loci]](c(NA,
+                                     NA,
                                      h[1],
                                      0,
                                      -h[1] * b,
@@ -262,10 +292,10 @@ Model_OUOU_correlated_evolution_omit_root <- function(parm, Data)
     )
     LL <- sum(gene.ll)
   }
-  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(173/4)),sdlog = 1.5,log=T)) + 
-    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = 1.5,log=T)) + 
-    dnorm(b,mean = 0,sd = 1,log=T)
-  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = 1,log=T))
+  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(tip.height/4)),sdlog = h.var,log=T)) +
+    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = sigma.var,log=T)) +
+    dnorm(b,mean = 0,sd = q.var,log=T)
+  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = psi.var,log=T))
   LP.unc <- LL + PR + HYP
   LP <- LP.unc + sum(log(c(h,sigma)))
   Modelout <- list(LP=LP,Dev=-2*LL, Monitor=c(LP,LP.unc,LL,PR,HYP), yhat=1, parm=parm,Parameter.LL=gene.ll)
@@ -286,6 +316,12 @@ Model_OUOU_correlated_evolution_sigma_off <- function(parm, Data)
   ll_fun <- Data[["ll_fun"]]
   prop <- Data[["prop"]]
   gene.ll <- Data[["Gene.LL"]]
+  tip.height <- Data[["tip.height.prior"]]
+  h.var <- Data[["h.var"]]
+  sigma.var <- Data[["sigma.var"]]
+  q.var <- Data[["q.var"]]
+  c.var <- Data[["c.var"]]
+  psi.var <- Data[["psi.var"]]
   if (prop[1] >= pos.psi[1] && !is.null(gene.ll))
   {
     gene.index <- floor((prop[1] - 6 - 1)/2) + 1
@@ -325,16 +361,20 @@ Model_OUOU_correlated_evolution_sigma_off <- function(parm, Data)
     )
     LL <- sum(gene.ll)
   }
-  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(173/4)),sdlog = 1.5,log=T)) +
-    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = 1.5,log=T)) +
-    sum(dnorm(c(c.val,b),mean = 0,sd = 1,log=T))
-  PR <- sum(dnorm(parm[pos.psi],mean = 0,sd = 1,log=T))
+  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(tip.height/4)),sdlog = h.var,log=T)) +
+    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = sigma.var,log=T)) +
+    dnorm(b,mean = 0,sd = q.var,log=T) +
+    dnorm(c.val,mean=0,sd = c.var,log=T)
+  PR <- sum(dnorm(parm[pos.psi],mean = 0,sd = psi.var,log=T))
+  
  
   LP.unc <- LL + PR + HYP
   LP <- LP.unc + sum(log(c(h,sigma)))
   Modelout <- list(LP=LP,Dev=-2*LL, Monitor=c(LP,LP.unc,LL,PR,HYP), yhat=1, parm=parm,Parameter.LL=gene.ll)
   return(Modelout)
 }
+
+
 
 Model_OUOU_correlated_evolution_sigma_off_omit_root <- function(parm, Data)
 {
@@ -347,23 +387,27 @@ Model_OUOU_correlated_evolution_sigma_off_omit_root <- function(parm, Data)
   ll_fun <- Data[["ll_fun"]]
   prop <- Data[["prop"]]
   gene.ll <- Data[["Gene.LL"]]
+  tip.height <- Data[["tip.height.prior"]]
+  h.var <- Data[["h.var"]]
+  sigma.var <- Data[["sigma.var"]]
+  q.var <- Data[["q.var"]]
+  c.var <- Data[["c.var"]]
+  psi.var <- Data[["psi.var"]]
   if (prop[1] >= pos.psi[1] && !is.null(gene.ll))
   {
     gene.index <- floor((prop[1] - 6 - 1)/2) + 1
     other.ll <- sum(gene.ll[-gene.index])
-    current.ll <- ll_fun[[gene.index]](c(#parm[prop[1]] + (b - (h[2]*c.val)/h[1])*parm[prop[2]],
-      NA,
-      NA,
-      h[1],
-      0,
-      h[2] * c.val - h[1] * b,
-      h[2],
-      #parm[prop[1]] + (b - (h[2]*c.val)/h[1])*parm[prop[2]],
-      parm[prop[1]] + b*parm[prop[2]],
-      parm[prop[2]],
-      sigma[1],
-      c.val*sigma[2],
-      sigma[2]))
+    current.ll <- ll_fun[[gene.index]](c(NA,
+                                         NA,
+                                         h[1],
+                                         0,
+                                         h[2] * c.val - h[1] * b,
+                                         h[2],
+                                         parm[prop[1]] + b*parm[prop[2]],
+                                         parm[prop[2]],
+                                         sigma[1],
+                                         c.val*sigma[2],
+                                         sigma[2]))
     LL <- current.ll + other.ll
     gene.ll[gene.index] <- current.ll
     
@@ -373,31 +417,96 @@ Model_OUOU_correlated_evolution_sigma_off_omit_root <- function(parm, Data)
     {
       par.index <- 6 + 2*(current.loci-1) + 1
       ll <- ll_fun[[current.loci]](c(NA,
-        NA,
-        h[1],
-        0,
-        h[2] * c.val - h[1] * b, # c should be multiplying alpha of predictor, b should be multiplying alpha of response
-        h[2],
-        parm[par.index] + b*parm[par.index+1],
-        parm[par.index+1],
-        sigma[1],
-        c.val*sigma[2], # c should be multiplying sigma of predictor
-        sigma[2]))
+                                     NA,
+                                     h[1],
+                                     0,
+                                     h[2] * c.val - h[1] * b, # c should be multiplying alpha of predictor, b should be multiplying alpha of response
+                                     h[2],
+                                     parm[par.index] + b*parm[par.index+1],
+                                     parm[par.index+1],
+                                     sigma[1],
+                                     c.val*sigma[2], # c should be multiplying sigma of predictor
+                                     sigma[2]))
       ll
     },mc.cores=Data$num.cores)
     )
     LL <- sum(gene.ll)
   }
-  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(173/4)),sdlog = 1.5,log=T)) + 
-    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = 1.5,log=T)) + 
-    sum(dnorm(c(c.val,b),mean = 0,sd = 1,log=T))
-  PR <- sum(dnorm(parm[pos.psi[1]:length(parm)],mean = 0,sd = 1,log=T))
+  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(tip.height/4)),sdlog = h.var,log=T)) +
+    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = sigma.var,log=T)) +
+    dnorm(b,mean = 0,sd = q.var,log=T) +
+    dnorm(c.val,mean = 0,sd = c.var,log=T)
+  PR <- sum(dnorm(parm[pos.psi],mean = 0,sd = psi.var,log=T))
   LP.unc <- LL + PR + HYP
   LP <- LP.unc + sum(log(c(h,sigma)))
   Modelout <- list(LP=LP,Dev=-2*LL, Monitor=c(LP,LP.unc,LL,PR,HYP), yhat=1, parm=parm,Parameter.LL=gene.ll)
   return(Modelout)
 }
 
+
+Model_OUOU_correlated_evolution_prot_dom_w_mrna_mut <- function(parm, Data)
+{
+  ### Parameters
+  pos.psi <- Data[["pos.psi"]]
+  h <- exp(parm[Data[["pos.h"]]])
+  b <- parm[Data[["pos.b"]]]
+  rho.val <- parm[Data[["pos.c"]]]
+  sigma <- exp(parm[Data[["pos.sigma"]]])
+  ll_fun <- Data[["ll_fun"]]
+  prop <- Data[["prop"]]
+  gene.ll <- Data[["Gene.LL"]]
+  tip.height <- Data[["tip.height.prior"]]
+  h.var <- Data[["h.var"]]
+  sigma.var <- Data[["sigma.var"]]
+  q.var <- Data[["q.var"]]
+  rho.var <- Data[["c.var"]]
+  psi.var <- Data[["psi.var"]]
+  if (prop[1] >= pos.psi[1] && !is.null(gene.ll))
+  {
+    gene.index <- floor((prop[1] - 6 - 1)/2) + 1
+    other.ll <- sum(gene.ll[-gene.index])
+    current.ll <- ll_fun[[gene.index]](c(parm[prop[1]] + b*parm[prop[2]],
+                                         parm[prop[2]],
+                                         h[1],
+                                         0,
+                                         -b * (h[1] + rho.val),
+                                         h[2],
+                                         parm[prop[1]] + b*parm[prop[2]],
+                                         parm[prop[2]],
+                                         sigma))
+    LL <- current.ll + other.ll
+    gene.ll[gene.index] <- current.ll
+    
+  } else {
+    num.genes <- (length(parm)-6)/2
+    gene.ll <- unlist(mclapply(1:num.genes, function(current.loci)
+    {
+      par.index <- 6 + 2*(current.loci-1) + 1
+      ll <- ll_fun[[current.loci]](c(parm[par.index] +  b * parm[par.index+1],
+                                     parm[par.index+1],
+                                     h[1],
+                                     0,
+                                     -b * (h[1] + rho.val),
+                                     h[2],
+                                     parm[par.index] + b*parm[par.index+1],
+                                     parm[par.index+1],
+                                     sigma))
+      ll
+    },mc.cores=Data$num.cores)
+    )
+    LL <- sum(gene.ll)
+  }
+  HYP <-  sum(dlnorm(h,meanlog = log(log(2)/(tip.height/4)),sdlog = 1.5,log=T)) +
+    sum(dlnorm(sigma,meanlog = log(0.25),sdlog = 1.5,log=T)) +
+    dnorm(b,mean = 0,sd = q.var,log=T) +
+    dnorm(rho.val,mean = 0,sd = rho.var,log=T)
+  PR <- sum(dnorm(parm[pos.psi],mean = 0,sd = 1,log=T))
+  
+  LP.unc <- LL + PR + HYP
+  LP <- LP.unc + sum(log(c(h,sigma)))
+  Modelout <- list(LP=LP,Dev=-2*LL, Monitor=c(LP,LP.unc,LL,PR,HYP), yhat=1, parm=parm,Parameter.LL=gene.ll)
+  return(Modelout)
+}
 
 
 dir.create(directory)
@@ -425,6 +534,10 @@ if (independent.evo)
   } else {
     Model_OUOU <- Model_OUOU_correlated_evolution_sigma_off_omit_root
   }
+  
+} else if (mrna.mutations.matter) {
+  model.type <- "OU__Global_X0__Global_H__Theta__Diagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
+  Model_OUOU <- Model_OUOU_correlated_evolution_prot_dom_w_mrna_mut
   
 } else {
   model.type <- "OU__Global_X0__Global_H__Theta__Diagonal_WithNonNegativeDiagonal_Sigma_x__Omitted_Sigmae_x"
@@ -478,6 +591,10 @@ if (reverse.trait.order)
   } else {
     data <- data[,c(1,2,4,3,6,5)]
   }
+  if (colnames(data)[3] != "Mean_Protein")
+  {
+    stop("There was an issue!")
+  }
 }
 
 if (!no.std.err)
@@ -513,7 +630,10 @@ data.pcmbase.format.trait <- purrr::map(data.gene,function(x){
     t()
 }
 )
+print(data.pcmbase.format.trait[[1]])
+print(data.pcmbase.format.se[[1]])
 
+print("Checking that data order matches phylogenetic tree")
 print(colnames(data.pcmbase.format.trait[[1]]) == tree$tip.label)
 
 n <- length(data.pcmbase.format.trait)
@@ -539,14 +659,15 @@ for (i in 1:n)
   }
 }
 
+tip.height <- unname(ips::tipHeights(tree)[1])
 min.edge <- tree$edge.length[which.min(tree$edge.length)]
-alpha.start.range <- c(log(2)/(ips::tipHeights(tree)[1]/4),
+alpha.start.range <- c(log(2)/(tip.height/4),
                        log(2)/min.edge)
 
 
 
 
-if (!independent.evo & !sigma.off.diagonal)
+if (!independent.evo && !sigma.off.diagonal && !mrna.mutations.matter)
 {
   # Get starting values. For now, use the mean of the prior for H and Sigma, 0 forQ (no affect of X on Y), and mean of each trait for optimum
   # Root state will be determined by optimum values for Y and X, as well as Q. 
@@ -581,7 +702,6 @@ if (!independent.evo & !sigma.off.diagonal)
   pos.b <- grep("Q",names(start.values))
   pos.sigma <- grep("Sigma",names(start.values))
   pos.psi <- grep("Psi",names(start.values))
-  
   MyData_OUOU <- list(ll_fun = likFun.list,
                       mon.names = c("LP","LP.unc","LL","PR","HYP"),
                       parm.names=names(start.values), 
@@ -591,6 +711,11 @@ if (!independent.evo & !sigma.off.diagonal)
                       pos.psi=pos.psi,
                       prop = 1:length(start.values),
                       num.cores = num.cores,
+                      tip.height.prior = tip.height,
+                      h.var = h.variance,
+                      sigma.var = sigma.variance,
+                      q.var = q.variance,
+                      psi.var = psi.variance,
                       N=length(tree$tip.label)*n*2)
   
   
@@ -606,8 +731,11 @@ if (!independent.evo & !sigma.off.diagonal)
     blockwise.sample.list[[i+num.block]] <- pos.psi.i
   }
   
-} else if (sigma.off.diagonal)
+} else if (sigma.off.diagonal || mrna.mutations.matter)
 {
+  ## Although these two models are different, the general set up for the MCMC is the same.
+  ## The primary difference is whether the parameter c or \rho is passed. 
+  
   #start.values <- c(log(alpha.start),log(alpha.start),0,0,log(0.25),log(0.25)) # will propose H, Sigma on log-scale
   start.values <- c(log(runif(n=1,min=alpha.start.range[1],max=alpha.start.range[2])),
                     log(runif(n=1,min=alpha.start.range[1],max=alpha.start.range[2])),
@@ -616,10 +744,16 @@ if (!independent.evo & !sigma.off.diagonal)
                     log(runif(n=1,min=0,max=5)),
                     log(runif(n=1,min=0,max=5))) # will propose H, Sigma on log-scale
   
-  
                     
-  
-  names(start.values) <- c("H_Y","H_X","Q","C","Sigma_Y","Sigma_X")
+  if (sigma.off.diagonal && !mrna.mutations.matter)
+  {
+    names(start.values) <- c("H_Y","H_X","Q","C","Sigma_Y","Sigma_X")
+  } else if (mrna.mutations.matter && !sigma.off.diagonal)
+  {
+    names(start.values) <- c("H_Y","H_X","Q","Rho","Sigma_Y","Sigma_X")
+  } else {
+    stop("You may have run this with both --sigma_off_diagonal and --mrna_mutations_matter. If fitting an mRNA-dominant model, use the former. If fitting a protein-domiant model, use the latter.")
+  }
   optimum.values <- unlist(
     lapply(1:length(data.pcmbase.format.trait), function(i)
     {
@@ -637,10 +771,15 @@ if (!independent.evo & !sigma.off.diagonal)
   start.values <- c(start.values,optimum.values + rnorm(n=length(optimum.values),0,psi.random.sd))
 
   
-  
   pos.h <- grep("H",names(start.values)) 
   pos.b <- grep("Q",names(start.values))
-  pos.c <- grep("C",names(start.values))
+  if (sigma.off.diagonal)
+  {
+    pos.c <- grep("C",names(start.values))
+  }
+  else {
+    pos.c <- grep("Rho",names(start.values)) # we're going to stick with pos.c, just to minimize changes to the code.
+  }
   pos.sigma <- grep("Sigma",names(start.values))
   pos.psi <- grep("Psi",names(start.values))
   MyData_OUOU <- list(ll_fun = likFun.list,
@@ -653,6 +792,12 @@ if (!independent.evo & !sigma.off.diagonal)
                       pos.psi=pos.psi,
                       prop = 1:length(start.values),
                       num.cores = num.cores,
+                      tip.height.prior = tip.height,
+                      h.var = h.variance,
+                      sigma.var = sigma.variance,
+                      q.var = q.variance,
+                      c.var = c.variance, # this is the the variance for \rho
+                      psi.var = psi.variance,
                       N=length(tree$tip.label)*n*2)
   
   
@@ -660,12 +805,6 @@ if (!independent.evo & !sigma.off.diagonal)
   blockwise.sample.list[[1]] <- c(2,6)
   blockwise.sample.list[[2]] <- c(3,4)
   blockwise.sample.list[[3]] <- c(1,5)
-  # blockwise.sample.list[[1]] <- c(2)
-  # blockwise.sample.list[[2]] <- c(6)
-  # blockwise.sample.list[[3]] <- c(3)
-  # blockwise.sample.list[[4]] <- c(4)
-  # blockwise.sample.list[[5]] <- c(1)
-  # blockwise.sample.list[[6]] <- c(5)
   num.block <- length(blockwise.sample.list)
   for (i in 1:n)
   {
@@ -713,6 +852,10 @@ if (!independent.evo & !sigma.off.diagonal)
                       pos.psi=pos.psi,
                       prop = 1:length(start.values),
                       num.cores = num.cores,
+                      tip.height.prior = tip.height,
+                      h.var = h.variance,
+                      sigma.var = sigma.variance,
+                      psi.var = psi.variance,
                       N=length(tree$tip.label)*n*2)
   
   
@@ -759,10 +902,33 @@ if (is.null(prev.adapt.run) && is.null(prev.rwm.run) & burnin.samples > 0)
                                 Algorithm = "RWM",
                                 Thinning = 1,
                                 Debug = list(DB.Model = F,
-                                             DB.chol = T),
+                                             DB.eigen=F,
+                                             DB.chol = F),
                                 Specs = list(B = blockwise.sample.list)
   )
+  nsample <- nrow(burnin$Monitor)
+  range.to.plot <- 1:nsample
   start.values <- burnin$Posterior1[burnin.samples,]
+  pdf(file.path(directory,"burnin_traces.pdf"))
+  plot(burnin$Monitor[range.to.plot,"LP"],type="l",ylab="Log(Posterior)")
+  plot(burnin$Monitor[range.to.plot,"LL"],type="l",ylab="Log(Likelihood)")
+  plot(burnin$Posterior1[range.to.plot,"H_Y"],type="l",ylab=expression(alpha["Y"]))
+  plot(burnin$Posterior1[range.to.plot,"H_X"],type="l",ylab=expression(alpha["X"]))
+  if (!independent.evo)
+  {
+    plot(burnin$Posterior1[range.to.plot,"Q"],type="l",ylab="Q")
+    if (sigma.off.diagonal)
+    {
+      plot(burnin$Posterior1[range.to.plot,"C"],type="l",ylab="C")
+    }
+    if (mrna.mutations.matter)
+    {
+      plot(burnin$Posterior1[range.to.plot,"Rho"],type="l",ylab="Rho")
+    }
+  }
+  plot(burnin$Posterior1[range.to.plot,"Sigma_Y"],type="l",ylab=expression(sigma["Y"]))
+  plot(burnin$Posterior1[range.to.plot,"Sigma_X"],type="l",ylab=expression(sigma["X"]))
+  dev.off()
   rm(burnin)
 }
 
@@ -786,9 +952,9 @@ if (adapt.samples > 0 && is.null(prev.adapt.run) && is.null(prev.rwm.run))
                                    Algorithm = "RAM",
                                    Status = 100,
                                    Thinning = thinning,
-                                   Debug = list(DB.Model = T,
-                                                DB.eigen=T,
-                                                DB.chol = T),
+                                   Debug = list(DB.Model = F,
+                                                DB.eigen=F,
+                                                DB.chol = F),
                                    Specs = list(alpha.star = alpha.star,
                                                 B = blockwise.sample.list,
                                                 Dist="t",
@@ -813,6 +979,10 @@ if (adapt.samples > 0 && is.null(prev.adapt.run) && is.null(prev.rwm.run))
     {
       plot(adapt.fit$Posterior1[range.to.plot,"C"],type="l",ylab="C")
     }
+    if (mrna.mutations.matter)
+    {
+      plot(adapt.fit$Posterior1[range.to.plot,"Rho"],type="l",ylab="Rho")
+    }
   }
   plot(adapt.fit$Posterior1[range.to.plot,"Sigma_Y"],type="l",ylab=expression(sigma["Y"]))
   plot(adapt.fit$Posterior1[range.to.plot,"Sigma_X"],type="l",ylab=expression(sigma["X"]))
@@ -832,9 +1002,9 @@ if (adapt.samples > 0 && is.null(prev.adapt.run) && is.null(prev.rwm.run))
                                    Iterations = adapt.samples,
                                    Algorithm = "RAM",
                                    Thinning = thinning,
-                                   Debug = list(DB.Model = T,
-                                                DB.eigen=T,
-                                                DB.chol = T),
+                                   Debug = list(DB.Model = F,
+                                                DB.eigen=F,
+                                                DB.chol = F),
                                    Specs = list(alpha.star = alpha.star,
                                                 B = blockwise.sample.list,
                                                 Dist="t",
@@ -858,19 +1028,25 @@ if (adapt.samples > 0 && is.null(prev.adapt.run) && is.null(prev.rwm.run))
     if (sigma.off.diagonal)
     {
       plot(adapt.fit$Posterior1[range.to.plot,"C"],type="l",ylab="C")
+    } 
+    if (mrna.mutations.matter)
+    {
+      plot(adapt.fit$Posterior1[range.to.plot,"Rho"],type="l",ylab="Rho")
     }
   }
   plot(adapt.fit$Posterior1[range.to.plot,"Sigma_Y"],type="l",ylab=expression(sigma["Y"]))
   plot(adapt.fit$Posterior1[range.to.plot,"Sigma_X"],type="l",ylab=expression(sigma["X"]))
   dev.off()
 }
+print("Getting ready for the next run...")
 num.prev.sample <- nrow(adapt.fit$Posterior1)
 start.values <- adapt.fit$Posterior1[num.prev.sample,]
 covar.matrix <- adapt.fit$Covar
 
+print("Beginning Random-Walk Metropolis MCMC for parameter estimation...")
 if (samples > 0)
 {
-  print("Beginning Random-Walk Metropolis MCMC for parameter estimation...")
+  
   fit <- LaplacesDemon_local(Model_OUOU,
                              MyData_OUOU,
                              Initial.Values = start.values,
@@ -878,9 +1054,9 @@ if (samples > 0)
                              Iterations = samples,
                              Algorithm = "RWM",
                              Thinning = thinning,
-                             Debug = list(DB.Model = T,
-                                          DB.eigen=T,
-                                          DB.chol = T),
+                             Debug = list(DB.Model = F,
+                                          DB.eigen=F,
+                                          DB.chol = F),
                              Specs = list(B = blockwise.sample.list)
   )
   
@@ -907,6 +1083,10 @@ if (samples > 0)
     if (sigma.off.diagonal)
     {
       plot(fit$Posterior1[range.to.plot,"C"],type="l",ylab="C")
+    }
+    if (mrna.mutations.matter)
+    {
+      plot(fit$Posterior1[range.to.plot,"Rho"],type="l",ylab="Rho")
     }
   }
   plot(fit$Posterior1[range.to.plot,"Sigma_Y"],type="l",ylab=expression(sigma["Y"]))

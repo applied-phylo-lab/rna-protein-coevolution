@@ -7,6 +7,58 @@ cleanData <- function(df)
   return(df)
 }
 
+convertZeroToNA <- function(df)
+{
+  df <- df %>% 
+    mutate(across(where(is.numeric),~ifelse(. == 0,NA,.)))
+  return(df)
+}
+
+transformLog <- function(df)
+{
+  df <- df %>% 
+    mutate(across(where(is.numeric),~log(.)))
+  return(df)
+}
+
+transformLog10 <- function(df)
+{
+  df <- df %>% 
+    mutate(across(where(is.numeric),~log10(.)))
+  return(df)
+}
+
+transformCenterMean <- function(df)
+{
+  df <- df %>% 
+    mutate(across(where(is.numeric),~(. - mean(.,na.rm=T))))
+  return(df)
+}
+
+transformCenterMedian <- function(df)
+{
+  df <- df %>% 
+    mutate(across(where(is.numeric),~(. - median(.,na.rm=T))))
+  return(df)
+}
+
+
+transformZScore <- function(df)
+{
+  df <- df %>% 
+    mutate(across(where(is.numeric),~(. - mean(.,na.rm=T))/sd(.,na.rm=T))
+    )
+  return(df)
+}
+
+transformSqrt <- function(df)
+{
+  df <- df %>% 
+          mutate(across(where(is.numeric),~sqrt(.)))
+  return(df)
+}
+
+
 calculateSummary <- function(df)
 {
   df <- df %>% 
@@ -36,37 +88,32 @@ calculateSummary <- function(df)
 }
 
 
-
-tree <- read.nexus("../Data/tree_11sp_noGpig.nex")
-tree <- force.ultrametric(tree,method = "extend")
-
 rna <- read_tsv("../Data/rna_abundances.tsv")
 prot <- read_tsv("../Data/protein_abundances.tsv")
 
-
 rna <- cleanData(rna)
 prot <- cleanData(prot)
+
 prot <- prot %>%
   dplyr::select(-contains("_mix"))
-rna <- rna %>% 
+
+## Filtering before calculating Z-scores
+rna <- rna %>%
   filter(GeneStableID %in% prot$GeneStableID)
 
-
-total.tpm.per.species <- colSums(rna[,2:ncol(rna)])
-
-rna <- rna %>% 
-  mutate(across(where(is.numeric),~ifelse(. == 0,NA,.)),
-         across(where(is.numeric),~log(.)),
-         across(where(is.numeric),~(. - mean(.,na.rm=T))/sd(.,na.rm=T))
-  )
+prot <- prot %>%
+  filter(GeneStableID %in% rna$GeneStableID)
 
 
+rna <- convertZeroToNA(rna)
+prot <- convertZeroToNA(prot)
 
-prot <- prot %>% 
-  mutate(across(where(is.numeric),~ifelse(. == 0,NA,.)),
-         across(where(is.numeric),~log(.)),
-         across(where(is.numeric),~(. - mean(.,na.rm=T))/sd(.,na.rm=T))
-  )
+rna <- transformLog(rna)
+prot <- transformLog(prot)
+
+
+rna <- transformZScore(rna)
+prot <- transformZScore(prot)
 
 
 rna.summary <- calculateSummary(rna)
@@ -84,12 +131,12 @@ prot.missing <- prot.summary %>%
   summarize(Total.Missing = sum(Missing)) %>%
   filter(Total.Missing == 0)
 
-rna.summary <- rna.summary %>%
-  filter(GeneStableID %in% rna.missing$GeneStableID) %>%
-  dplyr::rename(Gene_ID = GeneStableID) 
-prot.summary <- prot.summary %>%
-  filter(GeneStableID %in% prot.missing$GeneStableID) %>%
-  dplyr::rename(Gene_ID = GeneStableID) 
+ rna.summary <- rna.summary %>%
+   filter(GeneStableID %in% rna.missing$GeneStableID) %>%
+   dplyr::rename(Gene_ID = GeneStableID) 
+ prot.summary <- prot.summary %>%
+   filter(GeneStableID %in% prot.missing$GeneStableID) %>%
+   dplyr::rename(Gene_ID = GeneStableID) 
 
 expr.mean.df <- rna.summary %>% 
   dplyr::select(Gene_ID,Species,Mean) %>%
