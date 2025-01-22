@@ -45,3 +45,6 @@ Figures/*
 **/waic.csv
 **/*.out
 **/*_omit_root*
+
+# macOS files
+.DS_Store
