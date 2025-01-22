@@ -141,8 +141,8 @@ data <- data %>%
       Species == "Rattus_norvegicus" ~ "Rat",
       Species == "Monodelphis_domestica" ~ "Opossum",
       Species == "Oryctolagus_cuniculus" ~ "Rabbit"
-    )) %>%
-  filter(Species != "Human")
+    ))# %>%
+  #filter(Species != "Human")
 data.prot.wide <- data %>% 
   dplyr::select(Gene_ID,Species,Mean_Protein) %>%
   pivot_wider(id_cols=Gene_ID,names_from="Species",values_from="Mean_Protein")
@@ -151,18 +151,20 @@ data.mrna.wide <- data %>%
   pivot_wider(id_cols=Gene_ID,names_from="Species",values_from="Mean_RNA")
 
 
-pairwise.prot <- cor(data.prot.wide[,2:11],method="spearman")
-pairwise.mrna <- cor(data.mrna.wide[,2:11],method="spearman")
+tree.to.use <- tree.no.human
 
-pairwise.prot <- pairwise.prot[tree.no.human$tip.label,tree.no.human$tip.label]
-pairwise.mrna <- pairwise.mrna[tree.no.human$tip.label,tree.no.human$tip.label]
+pairwise.prot <- cor(data.prot.wide[,2:ncol(data.prot.wide)],method="spearman")
+pairwise.mrna <- cor(data.mrna.wide[,2:ncol(data.prot.wide)],method="spearman")
+
+pairwise.prot <- pairwise.prot[tree.to.use$tip.label,tree.to.use$tip.label]
+pairwise.mrna <- pairwise.mrna[tree.to.use$tip.label,tree.to.use$tip.label]
 pairwise.prot[upper.tri(pairwise.prot)] <- pairwise.mrna[upper.tri(pairwise.mrna)]
 
-tree.dend <- as.dendrogram(tree.no.human)
+tree.dend <- as.dendrogram(tree.to.use)
 
 diag(pairwise.prot) <- NA
 prot.cor <- Heatmap(pairwise.prot,
-        col = hcl.colors(25, palette = "Blues 3"),
+        col = rev(hcl.colors(25, palette = "Blues 3")),
         na_col = "black",
         cluster_rows = tree.dend,
         cluster_columns = F,
@@ -458,21 +460,21 @@ createSummaryFile("Results/Drop_human/Pop_average_model_all/Independent")
 
 ```{r}
 
-# model should be "Protein Dominant", "mRNA Dominant", "Independent"
-convertParameterSymbolsToPaperSymbols <- function(parameter.names,model = "Protein Dominant")
+# model should be "Protein Driven", "mRNA Driven", "Independent"
+convertParameterSymbolsToPaperSymbols <- function(parameter.names,model = "Protein Driven")
 {
-  prot.dom.list <- list("H_Y"="alpha","H_X"="beta","Q" = "a[R]","Sigma_Y"="tau[R]","Sigma_X"="tau[P]")
-  mrna.dom.list <-list("H_Y"="beta","H_X"="alpha","C"="c","Q" = "a[P]","Sigma_Y"="tau[P]","Sigma_X"="tau[R]")
-  indep.list <- list("H_Y"="alpha","H_X"="beta","Sigma_Y"="tau[R]","Sigma_X"="tau[P]")
-  if (model == "Protein Dominant")
+  prot.dom.list <- list("H_Y"="alpha[R]","H_X"="alpha[P]","Q" = "a[R]","Sigma_Y"="tau[R]","Sigma_X"="tau[P]")
+  mrna.dom.list <-list("H_Y"="alpha[P]","H_X"="alpha[R]","C"="c","Q" = "a[P]","Sigma_Y"="tau[P]","Sigma_X"="tau[R]")
+  indep.list <- list("H_Y"="alpha[R]","H_X"="alpha[P]","Sigma_Y"="tau[R]","Sigma_X"="tau[P]")
+  if (model == "Protein Driven")
   {
     name.map <- prot.dom.list[parameter.names]
-  } else if (model == "mRNA Dominant") {
+  } else if (model == "mRNA Driven") {
     name.map <- mrna.dom.list[parameter.names]
   } else if (model == "Independent") {
     name.map <- indep.list[parameter.names]
   } else{
-    print("Model name not one of the three options: Protein Dominant, mRNA Dominant, or Independent. Returning NA")
+    print("Model name not one of the three options: Protein Driven, mRNA Driven, or Independent. Returning NA")
     name.map <- NA
   }
   return(unname(unlist(name.map)))
@@ -481,7 +483,7 @@ convertParameterSymbolsToPaperSymbols <- function(parameter.names,model = "Prote
 
 
 compareParameterEstimatesAcrossRuns <- function(file.path.to.summary.files,
-                                                model="Protein Dominant")
+                                                model="Protein Driven")
 {
   prot.sel.strong.summary.files <- list.files(file.path.to.summary.files,
                                             recursive = T,
@@ -523,10 +525,10 @@ compareParameterEstimatesAcrossRuns <- function(file.path.to.summary.files,
 }
 
 prot.sel.strong.p <- compareParameterEstimatesAcrossRuns("Results/Drop_human/Pop_average_model_all/Protein_selection_strong/",
-                                    model="Protein Dominant")
+                                    model="Protein Driven")
 
 prot.sel.weak.p <- compareParameterEstimatesAcrossRuns("Results/Drop_human/Pop_average_model_all/Protein_selection_weak/",
-                                    model="mRNA Dominant")
+                                    model="mRNA Driven")
 
 indep.p <- compareParameterEstimatesAcrossRuns("Results/Drop_human/Pop_average_model_all/Independent//",
                                     model = "Independent")
@@ -741,7 +743,7 @@ number.enhancers.human <- read_csv("Data/CRE/EnhancerAtlas/human_keratinocyte_en
   dplyr::rename(Num.Enhancers.Human = Num.Enhancers)
 number.cres.human <- read_csv("Data/CRE/Human_cell_atlas/human_cell_atlas_cre.csv") %>% 
   dplyr::rename(Num.tCREs.Human = Num.Enhancers)
-number.enhancers.mouse <- read_csv("Data/CREr/EnhancerAtlas/mouse_kidney_enhancer_counts_per_gene_w_human_id.csv") %>% 
+number.enhancers.mouse <- read_csv("Data/CRE/EnhancerAtlas/mouse_kidney_enhancer_counts_per_gene_w_human_id.csv") %>% 
   dplyr::rename(Num.Enhancers.Mouse = Num.Enhancers) %>%
   dplyr::select(-Gene_ID)
 number.enhancers.fly <- read_csv("Data/CRE/EnhancerAtlas/fly_bg3c2_enhancer_counts_per_gene_w_human_id.csv") %>%
@@ -1000,7 +1002,7 @@ sel.vs.enh <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selectio
 
 sel.vs.enh
 
-sel.vs.cre <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Num.CREs.Human,y=Mean,color=Abundance)) +
+sel.vs.cre <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Num.tCREs.Human,y=Mean,color=Abundance)) +
   geom_point() +
   xlab("Median number of tCREs per gene") +
   ylab("Rate of adaptation (Log scale)") +
@@ -1028,7 +1030,7 @@ tau.diff.vs.enh.human <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.Enhancers.Human,
   theme_cowplot()
 tau.diff.vs.enh.human
 
-tau.diff.vs.cre.human <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.CREs.Human,y=Sigma.Diff)) +
+tau.diff.vs.cre.human <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.tCREs.Human,y=Sigma.Diff)) +
   geom_point() +
   xlab("Median number of tCREs per gene") +
   stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
@@ -1042,7 +1044,7 @@ tau.diff.vs.cre.human
 
 #### Mouse and Fly
 
-```{r fig.height=8,fig.width=8}
+```{r fig.height=10,fig.width=10}
 
 tau.diff.vs.enh.mouse <- ggplot(tau.w.enh.eqtl,aes(x=Median.Num.Enhancers.Mouse,y=Sigma.Diff)) +
   geom_point() +
@@ -1064,7 +1066,7 @@ sel.vs.enh.mouse <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Se
   geom_point() +
   xlab("Median number of enhancers per gene") +
   ylab("Rate of adaptation (Log scale)") +
-  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  stat_cor(method="spearman",show.legend = F) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
@@ -1076,7 +1078,7 @@ sel.vs.enh.fly <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
   geom_point() +
   xlab("Median number of enhancers per gene") +
   ylab("Rate of adaptation (Log scale)") +
-  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  stat_cor(method="spearman",show.legend = F) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
@@ -1275,7 +1277,7 @@ sel.vs.phylo.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
   xlab("Human 5'-UTR PhyloP scores") +
   ylab(expression("Rate of adaptation (Log scale)")) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
-  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  stat_cor(method="spearman",show.legend = F) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
   labs(color="Expression type") +
@@ -1289,7 +1291,7 @@ sel.vs.phast.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
   xlab("Human 5'-UTR phastCons scores") +
   ylab(expression("Rate of adaptation (Log scale)")) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
-  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
+  stat_cor(method="spearman",show.legend = F) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
   labs(color="Expression type") +
