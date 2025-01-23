@@ -12,6 +12,7 @@ All code can be run in the R programming environment. Most figures were generate
 | PCMBase	     	| 1.2.13        |
 | PCMBaseCpp       	| 0.1.9       	|
 | LaplacesDemon     | 16.1.6       	|
+| ramcmc            | 0.1.2
 | phytools          | 2.3-0      	|
 | ape               | 5.8       	|
 | argparse          | 2.2.3         |
@@ -23,6 +24,10 @@ We note we used some local versions of code from `LaplacesDemon` to correct erro
 ## `Data/`
 
 The `Data/` directory contains the necessary processed data and phylogenetic trees necessary to recreate the analyses described in Cope et al.
+
+## `R_scripts`
+
+Contains many of the necessary `R_scripts`. Other R scripts may be found in `Data/` for processing specific data files. 
 
 ## `Results/`
 
