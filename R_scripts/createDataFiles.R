@@ -111,9 +111,9 @@ prot <- convertZeroToNA(prot)
 rna <- transformLog(rna)
 prot <- transformLog(prot)
 
-
-rna <- transformZScore(rna)
-prot <- transformZScore(prot)
+# 
+# rna <- transformZScore(rna)
+# prot <- transformZScore(prot)
 
 
 rna.summary <- calculateSummary(rna)
@@ -154,4 +154,8 @@ expr.se.df <- rna.summary %>%
 expr.mean.se <- expr.mean.df %>%
   left_join(expr.se.df,by=c("Gene_ID","Species"))
 
-write_tsv(expr.mean.se,"../Data/mean_se_rna_protein.tsv")
+expr.mean.df <- expr.mean.df %>% 
+  mutate(Mean_RNA = exp(Mean_RNA),
+         Mean_Protein = exp(Mean_Protein))
+
+write_tsv(expr.mean.se,"../Data/mean_rna_protein.tsv")

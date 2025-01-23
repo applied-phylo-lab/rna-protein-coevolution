@@ -9,7 +9,7 @@ data.summ <- data %>%
             Mean_RNA = mean(Mean_RNA))
 
 data.summ <- data.summ %>% 
-  mutate(Bin = cut2(Mean_Protein,g = 5))
+  mutate(Bin = cut2(Mean_Protein,g = 10))
 
 data.split <- data %>%
   left_join(data.summ %>% dplyr::select(Gene_ID,Bin)) %>%
@@ -21,7 +21,7 @@ bin.names <- c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","8
 
 lapply(1:length(bin.names),function(x)
   {
-   write_tsv(data.split[[x]] %>% dplyr::select(-Bin),paste0("../Data/Bin_based_on_mrna/10_groups/mean_se_rna_protein_",bin.names[x],".tsv"))
+   write_tsv(data.split[[x]] %>% dplyr::select(-Bin),paste0("../Data/Bin_based_on_protein/10_groups/mean_se_rna_protein_",bin.names[x],".tsv"))
 })
 
   

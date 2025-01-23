@@ -1,11 +1,11 @@
-library(PCMBase,lib.loc = "~/R_dev")
+library(PCMBase)
 library(PCMBaseCpp)
 library(LaplacesDemon,lib.loc = "~/R_dev/")
 library(tidyverse)
 library(phytools)
 library(argparse)
 library(parallel)
-source("/data2/cope/Active_projects/Cope_Schraiber_Pennell/rna-protein-coevolution/R_scripts/local_functions.R")
+source("local_functions.R")
 
 
 parser <- ArgumentParser()

@@ -16,6 +16,8 @@ library(dendextend)
 library(ComplexHeatmap)
 library(scales)
 library(ggpubr)
+library(broom)
+library(LaplacesDemon,lib.loc="~/R_dev/")
 
 CleanData <- function(phy, data) {
   cleaned <- geiger::treedata(phy,data,warnings=T)
@@ -107,23 +109,6 @@ plot(node.date)
 
 
 
-```{r fig.width=5,fig.height=5}
-
-tree.p <- ggtree(tree) %<+% d + 
-  geom_tiplab(size=6) + 
-  geom_tiplab(aes(image=uid), geom="phylopic", offset=30) +
-  xlim(0,200) + 
-  theme_tree2() +
-  theme(axis.text=element_text(size=14,face="bold"))
-tree.p
-ggsave2("Figures/phylo_tree.pdf",tree.p,width=9)
-
-
-```
-
-
-
-
 
 ```{r}
 
@@ -141,8 +126,8 @@ data <- data %>%
       Species == "Rattus_norvegicus" ~ "Rat",
       Species == "Monodelphis_domestica" ~ "Opossum",
       Species == "Oryctolagus_cuniculus" ~ "Rabbit"
-    ))# %>%
-  #filter(Species != "Human")
+    ))
+
 data.prot.wide <- data %>% 
   dplyr::select(Gene_ID,Species,Mean_Protein) %>%
   pivot_wider(id_cols=Gene_ID,names_from="Species",values_from="Mean_Protein")
@@ -240,7 +225,7 @@ ggsave2("Figures/Figure_2.pdf",p,width=14,height = 5)
 ```
 
 ```{r}
-library(broom)
+
 calculatePIC <- function(data,tree)
 {
   
@@ -258,7 +243,7 @@ across.species.corr. <- data %>%
         dplyr::select(Mean_RNA,Mean_Protein) %>% 
         dplyr::filter(!is.na(Mean_RNA) & !is.na(Mean_Protein)) %>%
         as.matrix()
-      cleaned <- CleanData(ba.tree,tmp)
+      cleaned <- CleanData(tree.to.use,tmp)
       x <- cleaned$data
       tmp.tree <- cleaned$phy
       rna.values <- x[,"Mean_RNA"]
@@ -286,7 +271,9 @@ ggsave2("Figures/mrna_protein_corr_across_species_pic.pdf",mrna.vs.prot.cor)
 
 
 ## Comparing models using Deviance Information Criterion
-```{r}
+
+The code immediately below this is what was used locally. This relies on the R objects saved from `LaplacesDemon`. These are too large to upload to the GitHub repo. We have also included code that recalculates DIC from the `summary.tsv` files stored from each run in the code chunk below this one. They give the same answer, but recognize their could be small discrepancies due to rounding, truncation, etc. when the R object summary object is saved as a FLAT file (this is pure speculation on my part...). 
+```{r,eval=F}
 load("Results/Drop_human/Pop_average_model_all/Protein_selection_strong/2024-10-27_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 prot.dom.fit <- fit
 load("Results/Drop_human/Pop_average_model_all/Protein_selection_weak/2024-10-27_mrna_determines_prot_off_diagonal_sigma_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
@@ -294,13 +281,44 @@ mrna.dom.fit <- fit
 load("Results/Drop_human/Pop_average_model_all/Independent/2024-10-27_independent_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 indep.fit <- fit
 
-prot.dom.fit$DIC2 - mrna.dom.fit$DIC2
-prot.dom.fit$DIC2 - indep.fit$DIC2
+prot.dom.fit.dic <- prot.dom.fit$DIC2[3]
+mrna.dom.fit.dic <- mrna.dom.fit$DIC2[3]
+indep.fit.dic <- indep.fit$DIC2[3]
+
+
+prot.dom.fit.dic - mrna.dom.fit.dic
+prot.dom.fit.dic - indep.fit.dic
 ```
 
 
 ```{r}
-dic.scores <- c(prot.dom.fit$DIC2[3],mrna.dom.fit$DIC2[3],indep.fit$DIC2[3])
+
+prot.dom.fit <- read_tsv("Results/Drop_human/Pop_average_model_all/Protein_selection_strong/2024-10-27_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start/summary.tsv")
+mrna.dom.fit <- read_tsv("Results/Drop_human/Pop_average_model_all/Protein_selection_weak/2024-10-27_mrna_determines_prot_off_diagonal_sigma_prior_based_on_vertlife_mcc_node_dated_tree_random_start/summary.tsv")
+indep.fit <- read_tsv("Results/Drop_human/Pop_average_model_all/Independent/2024-10-27_independent_prior_based_on_vertlife_mcc_node_dated_tree_random_start/summary.tsv")
+
+prot.dom.fit <- prot.dom.fit %>% filter(Parameter == "Deviance")
+mrna.dom.fit <- mrna.dom.fit %>% filter(Parameter == "Deviance")
+indep.fit <- indep.fit %>% filter(Parameter == "Deviance")
+mrna.dom.fit <- mrna.dom.fit %>% filter(Parameter == "Deviance")
+indep.fit <- indep.fit %>% filter(Parameter == "Deviance")
+
+calculateDICFromSummary <- function(deviance.vec)
+{
+  return(deviance.vec$Mean + (deviance.vec$SD)^2/2) # DIC is calculated using the suggested formula from Gelman.
+}
+
+prot.dom.fit.dic <- calculateDICFromSummary(prot.dom.fit)
+mrna.dom.fit.dic <- calculateDICFromSummary(mrna.dom.fit)
+indep.fit.dic <- calculateDICFromSummary(indep.fit)
+
+
+prot.dom.fit.dic - mrna.dom.fit.dic
+prot.dom.fit.dic - indep.fit.dic
+```
+
+```{r}
+dic.scores <- c(prot.dom.fit.dic,mrna.dom.fit.dic,indep.fit.dic)
 min.dic <- dic.scores[which.min(dic.scores)]
 delta.dic <- min.dic - dic.scores 
 
@@ -321,10 +339,12 @@ dic.bar <- ggplot(dic.df,aes(x=Model,y=DIC,fill=Model)) +
 dic.bar
 ```
 
+## Plot histograms of parameter posterior distributions -- will require the R objects 
 
+This code cannot be run using the `summary.tsv` files, but requires the R object files output by `LaplacesDemon`. Please reach out to one of the authors so we can get you these files. You can also recreate the runs yourself using the code available in `R_scripts` and the `README.md` files for each run. This should generate results similar to ours (and please let us know if they do not). 
 
 ```{r}
-library(LaplacesDemon,lib.loc="~/R_dev/")
+
 alpha.b <- prot.dom.fit$Posterior2[,1:5]
 
 hlf.trace <- apply(alpha.b,1,function(x)
@@ -420,13 +440,13 @@ tau.plot
 
 ```{r fig.width=10, fig.height=10}
 total <- (dic.bar + alpha.plot + plot_layout(widths = c(1,1.9))) / (slope.plot | tau.plot) + plot_annotation(tag_levels ="A")
-ggsave2("Figures/Figure_3.pdf",total,width=10,height = 7.25)
+ggsave2("Figures/parameter_histograms_and_dic_plot.pdf",total,width=10,height = 7.25)
 ```
 
 
 
 
-### Check for consistency across runs
+### Check for consistency across runs - resume code that can be run without the R objects
 
 Here, I will be looking at the runs where the human species is dropped from our analysis.
 
@@ -451,7 +471,6 @@ createSummaryFile <- function(file.path.to.runs)
 createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_strong")    
 createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_weak") 
 createSummaryFile("Results/Drop_human/Pop_average_model_all/Independent")
-
 
 
 
@@ -587,7 +606,7 @@ createDICTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-
   return(dic.table)
 }
 
-createParamTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+",adapt=F)
+createParamTableFromRobjects <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+",adapt=F)
 {
   names(filepaths.mcmc.obj) <- extractRunNameFromFilePath(mcmc.rda,pattern=pattern)
   param.table <- lapply(filepaths.mcmc.obj,getSummaryTable,adapt=adapt) %>%
@@ -597,35 +616,23 @@ createParamTable <- function(filepaths.mcmc.obj,pattern="[0-9]{1,2}-[0-9]{2,3}/[
   return(param.table)
 }
 
-
-
-getParamTableForSetofRuns <- function(toplevel,mcmc.pattern,model.type="Protein_selection_strong",adapt=F)
+createParamTableFromSummary <- function(file.path.summary,pattern="[0-9]{1,2}-[0-9]{2,3}/[A-Za-z_]+")
 {
-  
+  names(file.path.summary) <- extractRunNameFromFilePath(file.path.summary,pattern=pattern)
+  param.table <- lapply(file.path.summary,read_tsv,col_types=cols()) %>%
+    bind_rows(.id="Data-Model_Fit")
+  param.table <- param.table %>%
+    separate(`Data-Model_Fit`,sep="/",into = c("Data","Model_Fit"))
+  return(param.table)
 }
 
-adapt<-F
+
+
+
 toplevel <- list.files(path="Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",pattern = "^[0-9]{1,2}-[0-9]{2,3}$",include.dirs = T)
-prot.strong.mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
-prot.weak.mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",toplevel,"Protein_selection_weak","2024-11-14_mrna_determines_prot_off_diagonal_sigma_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
-mcmc.rda <- c(prot.strong.mcmc.rda,prot.weak.mcmc.rda)
+prot.strong.summary <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="summary.tsv",recursive = T,full.names = T)
 
-
-
-# toplevel <- list.files(path="Results/Drop_human/Bin_based_on_species_mean_protein/",pattern = "^[0-9]{1,2}-[0-9]{2,3}$",include.dirs = T)
-# mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_species_mean_protein/",toplevel,"Protein_selection_strong","2024-11-11_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
-
-
-# toplevel <- list.files(path="Results/Drop_human/Bin_based_on_paxdb_human_prot_abund_essential/",pattern = "^[0-9]{1,2}-[0-9]{2,3}$",include.dirs = T)
-# mcmc.rda <- list.files(path=file.path("Results/Drop_human/Bin_based_on_paxdb_human_prot_abund_essential/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
-
-dic.table <- createDICTable(mcmc.rda)
-dic.table <- dic.table %>%
-  group_by(Data) %>%
-  mutate(Delta.DIC = DIC - min(DIC))
-dic.table
-
-prot.dom.param.table <- createParamTable(mcmc.rda,adapt = adapt) %>%
+prot.dom.param.table <- createParamTableFromSummary(prot.strong.summary) %>%
   mutate(Bin.order = case_when(
              Data == "0-10" ~ 1,
              Data == "10-20" ~ 2,
@@ -1066,7 +1073,7 @@ sel.vs.enh.mouse <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Se
   geom_point() +
   xlab("Median number of enhancers per gene") +
   ylab("Rate of adaptation (Log scale)") +
-  stat_cor(method="spearman",show.legend = F) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
@@ -1078,7 +1085,7 @@ sel.vs.enh.fly <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
   geom_point() +
   xlab("Median number of enhancers per gene") +
   ylab("Rate of adaptation (Log scale)") +
-  stat_cor(method="spearman",show.legend = F) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
@@ -1277,7 +1284,7 @@ sel.vs.phylo.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
   xlab("Human 5'-UTR PhyloP scores") +
   ylab(expression("Rate of adaptation (Log scale)")) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
-  stat_cor(method="spearman",show.legend = F) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
   labs(color="Expression type") +
@@ -1291,7 +1298,7 @@ sel.vs.phast.p <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
   xlab("Human 5'-UTR phastCons scores") +
   ylab(expression("Rate of adaptation (Log scale)")) +
   geom_errorbar(aes(ymin=LB,ymax=UB),width=0) +
-  stat_cor(method="spearman",show.legend = F) +
+  stat_cor(method="spearman",aes(label=..r.label..),show.legend = F) +
   scale_color_manual(values=c("mRNA"=mrna.color,"Protein"=prot.color)) +
   theme_cowplot() + 
   labs(color="Expression type") +
@@ -1416,7 +1423,7 @@ ggsave2("Figures/human_mouse_utr_length.pdf",human.mouse.utr.length,width=10,hei
 
 
 
-## Re-ordering figures for Science submission
+## Re-ordering figures for Science submission - will not work unless you were able to generate the histograms for the parameters. 
 
 ```{r fig.width=9,fig.height=9}
 layout <- "
