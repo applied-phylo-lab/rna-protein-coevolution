@@ -201,13 +201,14 @@ dist.cor.mrna <- dist.cor %>% filter(Measure == "mRNA")
 ```{r}
 
 
-div.p <- ggplot(dist.cor,aes(x=Distance,y=Correlation,color=Measure)) +
+div.p <- ggplot(dist.cor,aes(x=Distance/2,y=Correlation,color=Measure)) +
   geom_point() +
   theme_cowplot() +
   scale_color_manual(values = c("mRNA"=mrna.color,"Protein"=prot.color)) +
   labs(color="Expression type") +
-  xlab("Divergence Time (MYA)") +
-  ylab("Pairwise Similarity\n(Spearman Correlation)")
+  xlab("Divergence Time (Mya)") +
+  ylab("Pairwise Similarity\n(Spearman Correlation)") +
+  scale_x_continuous(breaks=c(50,100,150))
 div.p
 
 ```
@@ -446,9 +447,9 @@ ggsave2("Figures/parameter_histograms_and_dic_plot.pdf",total,width=10,height = 
 
 
 
-### Check for consistency across runs - resume code that can be run without the R objects
+### Check for consistency across runs - mostly resume code that can be run without the R objects
 
-Here, I will be looking at the runs where the human species is dropped from our analysis.
+Here, I will be looking at the runs where the human species is dropped from our analysis. This first chunk is just to create summary flat files from the R objects output by LaplacesDemon. These commands have been commented out and summary files should be abvailable in the GitHub repo.
 
 
 ```{r}
@@ -468,10 +469,13 @@ createSummaryFile <- function(file.path.to.runs)
   purrr::map2(r.object.files ,output,createSummaryFileForTargets)
 }
 
-createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_strong")    
-createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_weak") 
-createSummaryFile("Results/Drop_human/Pop_average_model_all/Independent")
-
+# createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_strong")    
+# createSummaryFile("Results/Drop_human/Pop_average_model_all/Protein_selection_weak") 
+# createSummaryFile("Results/Drop_human/Pop_average_model_all/Independent")
+# createSummaryFile("Results/Drop_human/Essential_vs_non_essential/Essential")
+# createSummaryFile("Results/Drop_human/Essential_vs_non_essential/Non_essential")
+# createSummaryFile("Results/Drop_human/Haplosufficient_vs_insufficient/Haploinsufficient")
+# createSummaryFile("Results/Drop_human/Haplosufficient_vs_insufficient/Haplosufficient")
 
 
 ```
@@ -567,7 +571,7 @@ ggsave2("Figures/convergence_across_mcmc_runs.pdf",comb.plot,width=15,height=5)
 
 ### Assess impact of gene expression
 
-The impact of gene expression on the evolutionary patterns observed across species of orthologous proteins is well-established. 
+The impact of gene expression on the evolutionary patterns observed across species of orthologous proteins is well-established. Here, we examine if there are systematic differences in parameters as a function of gene expression. Protein-driven models were fit to decile bins based on independent human protein abundance data from PaxDB (whole organism, integrated).
 
 ```{r}
 
@@ -713,7 +717,7 @@ ggsave2("Figures/impact_of_expression_on_protein_dominant_model_parameters_human
 
 ```
 
-
+Below, we set up a data frame that contains data gene regulation and eQTL data vary across bins. We correlate our parameters with this data.
 
 ```{r}
 
@@ -831,6 +835,7 @@ param.table.w.enh.eqtl <- prot.dom.param.table %>%
 param.table.w.enh.eqtl <- param.table.w.enh.eqtl %>%
   left_join(human.bin.features,by=c("Data" = "Bin"))
 ```
+Below are violin and scatter plots showing the relationship of the different data with gene expression. Most of the relationships are weak. 
 
 ```{r,fig.height=7,fig.width=7}
 
@@ -869,12 +874,14 @@ ggsave2("Figures/paxdb_human_protein_bins_vs_feature_violin.pdf",plot=feature.vs
 
 ## Essential vs. non-essential
 
+Aside from gene expression, gene essentiality is also expected to result in stronger selection and thus higher rates of adaptation compared to non-essential genes. Essential genes are based on a set of CRISPR knockouts in human cell lines and were obtained from the references noted in the manuscript and relevant README file. 
+
 ```{r}
 toplevel <- list.files(path="Results/Drop_human/Essential_vs_non_essential/",pattern = "[A-Za-z_]+",include.dirs = T)
-mcmc.rda <- list.files(path=file.path("Results/Drop_human/Essential_vs_non_essential",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+mcmc.rda <- list.files(path=file.path("Results/Drop_human/Essential_vs_non_essential",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="summary.tsv",recursive = T,full.names = T)
 
-ess.param.table <- createParamTable(mcmc.rda,pattern="(Essential|Non_essential)/[A-Za-z_]+")
-
+#ess.param.table <- createParamTableFromRobjects(mcmc.rda,pattern="(Essential|Non_essential)/[A-Za-z_]+")
+ess.param.table <- createParamTableFromSummary(file.path.summary = mcmc.rda, pattern="(Essential|Non_essential)/[A-Za-z_]+")
 ```
 
 
@@ -898,7 +905,10 @@ ess.p
 
 ```
 
-```{r}
+### THIS R CODE CHUNK WILL REQUIRE THE R OBJECT FILES
+
+
+```{r eval=FALSE}
 load("Results/Drop_human/Essential_vs_non_essential/Essential/Protein_selection_strong/2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start/rwm_mcmc_1.Rda")
 ess.fit <- fit
 
@@ -922,12 +932,15 @@ ci.non.ess
 
 ## Haploinsufficient vs. Haplosufficient
 
+We also assess if parameters vary based on if a gene is haploinsufficient or not. 
+
+
 ```{r}
 toplevel <- list.files(path="Results/Drop_human/Haplosufficient_vs_insufficient/",pattern = "[A-Za-z_]+",include.dirs = T)
-mcmc.rda <- list.files(path=file.path("Results/Drop_human/Haplosufficient_vs_insufficient/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="rwm_mcmc_1.Rda",recursive = T,full.names = T)
+mcmc.rda <- list.files(path=file.path("Results/Drop_human/Haplosufficient_vs_insufficient/",toplevel,"Protein_selection_strong","2024-11-01_prot_determines_mrna_prior_based_on_vertlife_mcc_node_dated_tree_random_start"),pattern="summary.tsv",recursive = T,full.names = T)
 
-haplo.param.table <- createParamTable(mcmc.rda,pattern="(Haplosufficient|Haploinsufficient)/[A-Za-z_]+")
-
+#haplo.param.table <- createParamTable(mcmc.rda,pattern="(Haplosufficient|Haploinsufficient)/[A-Za-z_]+")
+haplo.param.table <- createParamTableFromSummary(file.path.summary = mcmc.rda, pattern="(Haplosufficient|Haploinsufficient)/[A-Za-z_]+")
 ```
 
 
@@ -1007,7 +1020,7 @@ sel.vs.enh <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selectio
   labs(color="Expression type") +
   facet_wrap(~Abundance)
 
-sel.vs.enh
+sel.vs.enh + ggtitle("Human")
 
 sel.vs.cre <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Selection"),aes(x=Median.Num.tCREs.Human,y=Mean,color=Abundance)) +
   geom_point() +
@@ -1096,6 +1109,11 @@ sel.vs.enh.fly <- ggplot(param.table.w.enh.eqtl %>% filter(Parameter.type=="Sele
 mouse.fly.enh <- (sel.vs.enh.mouse + tau.diff.vs.enh.mouse + sel.vs.enh.fly + tau.diff.vs.enh.fly + sel.vs.cre + tau.diff.vs.cre.human) + plot_layout(guides="collect",nrow=3)
 mouse.fly.enh
 ggsave2("Figures/mouse_fly_enhancer.pdf",mouse.fly.enh,width = 9,height=9)
+
+```
+
+```{r}
+sel.vs.enh.mouse
 
 ```
 
